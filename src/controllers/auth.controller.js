@@ -1,9 +1,8 @@
 const bcrypt = require('bcryptjs');
-const { v4: uuidv4 } = require('uuid');
 const { AppError } = require('../utils/errors');
 const { isValidEmail, isValidPassword } = require('../utils/validators');
 const { signToken } = require('../utils/jwt');
-const store = require('../store/memory.store');
+const store = require('../store/db.store');
 
 const SALT_ROUNDS = 10;
 
@@ -23,22 +22,16 @@ async function register(req, res, next) {
 
     const normalizedEmail = email.toLowerCase().trim();
 
-    if (store.usersByEmail.has(normalizedEmail)) {
+    if (await store.findUserByEmail(normalizedEmail)) {
       throw new AppError('Ya existe un usuario registrado con ese email', 409);
     }
 
     const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
-    const id = uuidv4();
-    const user = {
-      id,
+    const user = await store.createUser({
       name: name.trim(),
       email: normalizedEmail,
       passwordHash,
-      createdAt: new Date().toISOString(),
-    };
-
-    store.users.set(id, user);
-    store.usersByEmail.set(normalizedEmail, id);
+    });
 
     res.status(201).json({ user: store.toPublicUser(user) });
   } catch (err) {
@@ -55,8 +48,7 @@ async function login(req, res, next) {
     }
 
     const normalizedEmail = email.toLowerCase().trim();
-    const userId = store.usersByEmail.get(normalizedEmail);
-    const user = userId ? store.users.get(userId) : null;
+    const user = await store.findUserByEmail(normalizedEmail);
 
     if (!user) {
       throw new AppError('Credenciales invalidas', 401);
@@ -67,33 +59,23 @@ async function login(req, res, next) {
       throw new AppError('Credenciales invalidas', 401);
     }
 
-    const deviceId = uuidv4();
-    const now = new Date().toISOString();
-    const device = {
-      deviceId,
+    const now = new Date();
+    const device = await store.createDevice({
       userId: user.id,
       deviceName: typeof deviceName === 'string' && deviceName.trim() ? deviceName.trim() : 'Dispositivo sin nombre',
-      createdAt: now,
       lastLoginAt: now,
-      active: true,
-    };
-    store.devices.set(deviceId, device);
+    });
 
-    const sessionId = uuidv4();
-    const session = {
-      sessionId,
+    const session = await store.createSession({
       userId: user.id,
-      deviceId,
-      createdAt: now,
-      revoked: false,
-    };
-    store.sessions.set(sessionId, session);
+      deviceId: device.deviceId,
+    });
 
-    const token = signToken({ userId: user.id, sessionId, deviceId });
+    const token = signToken({ userId: user.id, sessionId: session.sessionId, deviceId: device.deviceId });
 
     res.status(200).json({
       token,
-      deviceId,
+      deviceId: device.deviceId,
       user: store.toPublicUser(user),
     });
   } catch (err) {
@@ -103,7 +85,7 @@ async function login(req, res, next) {
 
 async function me(req, res, next) {
   try {
-    const user = store.users.get(req.auth.userId);
+    const user = await store.findUserById(req.auth.userId);
     if (!user) {
       throw new AppError('Usuario no encontrado', 404);
     }
@@ -124,7 +106,7 @@ async function changePassword(req, res, next) {
       throw new AppError('La nueva contrasena debe tener un minimo de 8 caracteres', 400);
     }
 
-    const user = store.users.get(req.auth.userId);
+    const user = await store.findUserById(req.auth.userId);
     if (!user) {
       throw new AppError('Usuario no encontrado', 404);
     }
@@ -139,8 +121,9 @@ async function changePassword(req, res, next) {
       throw new AppError('La nueva contrasena no puede ser igual a la contrasena actual', 409);
     }
 
-    user.passwordHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
-    store.revokeSessionsByUser(user.id);
+    const passwordHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
+    await store.updateUserPassword(user.id, passwordHash);
+    await store.revokeSessionsByUser(user.id);
 
     res.status(200).json({
       message: 'Contrasena actualizada correctamente. Todas las sesiones fueron cerradas, inicia sesion nuevamente.',
@@ -152,9 +135,9 @@ async function changePassword(req, res, next) {
 
 async function logout(req, res, next) {
   try {
-    const session = store.sessions.get(req.auth.sessionId);
+    const session = await store.findSessionById(req.auth.sessionId);
     if (session) {
-      session.revoked = true;
+      await store.revokeSession(session.sessionId);
     }
     res.status(200).json({ message: 'Sesion cerrada correctamente' });
   } catch (err) {

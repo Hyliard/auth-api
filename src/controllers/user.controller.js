@@ -1,6 +1,6 @@
 const bcrypt = require('bcryptjs');
 const { AppError } = require('../utils/errors');
-const store = require('../store/memory.store');
+const store = require('../store/db.store');
 
 async function deleteAccount(req, res, next) {
   try {
@@ -10,7 +10,7 @@ async function deleteAccount(req, res, next) {
       throw new AppError('El campo password es obligatorio', 400);
     }
 
-    const user = store.users.get(req.auth.userId);
+    const user = await store.findUserById(req.auth.userId);
     if (!user) {
       throw new AppError('Usuario no encontrado', 404);
     }
@@ -20,10 +20,8 @@ async function deleteAccount(req, res, next) {
       throw new AppError('Contrasena incorrecta', 401);
     }
 
-    store.deleteDevicesByUser(user.id);
-    store.revokeSessionsByUser(user.id);
-    store.users.delete(user.id);
-    store.usersByEmail.delete(user.email);
+    await store.revokeSessionsByUser(user.id);
+    await store.deleteUser(user.id);
 
     res.status(200).json({ message: 'Cuenta eliminada correctamente' });
   } catch (err) {

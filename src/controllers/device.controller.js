@@ -1,9 +1,10 @@
 const { AppError } = require('../utils/errors');
-const store = require('../store/memory.store');
+const store = require('../store/db.store');
 
-function listDevices(req, res, next) {
+async function listDevices(req, res, next) {
   try {
-    const userDevices = store.getDevicesByUser(req.auth.userId).map((d) => ({
+    const devices = await store.getDevicesByUser(req.auth.userId);
+    const userDevices = devices.map((d) => ({
       deviceId: d.deviceId,
       deviceName: d.deviceName,
       createdAt: d.createdAt,
@@ -17,10 +18,10 @@ function listDevices(req, res, next) {
   }
 }
 
-function unlinkDevice(req, res, next) {
+async function unlinkDevice(req, res, next) {
   try {
     const { deviceId } = req.params;
-    const device = store.devices.get(deviceId);
+    const device = await store.findDeviceById(deviceId);
 
     if (!device || device.userId !== req.auth.userId) {
       throw new AppError('Dispositivo no encontrado', 404);
@@ -28,9 +29,8 @@ function unlinkDevice(req, res, next) {
 
     const wasCurrentDevice = deviceId === req.auth.deviceId;
 
-    device.active = false;
-    store.revokeSessionsByDevice(deviceId);
-    store.devices.delete(deviceId);
+    await store.revokeSessionsByDevice(deviceId);
+    await store.deleteDevice(deviceId);
 
     res.status(200).json({
       message: wasCurrentDevice

@@ -1,19 +1,19 @@
 # Auth API Local
 
-API REST de autenticacion construida con Node.js + Express, sin base de datos.
-Los usuarios, dispositivos y sesiones se guardan en `Map()` en memoria dentro
-de `src/store/memory.store.js`. **Todos los datos se pierden cuando el
-proceso del servidor se reinicia.**
+API REST de autenticacion construida con Node.js + Express, PostgreSQL y Prisma.
+Los usuarios, dispositivos y sesiones persisten en PostgreSQL.
 
 ## Requisitos
 
 - Node.js >= 18 (usa `node --watch` para el modo dev)
+- Docker con Docker Compose
 
 ## Instalacion y ejecucion
 
 ```bash
 npm install
 cp .env.example .env
+npx prisma migrate dev
 npm run dev
 ```
 
@@ -33,6 +33,7 @@ Variables de entorno (`.env`):
 PORT=3000
 JWT_SECRET=cambia_este_secreto_por_una_cadena_larga_y_aleatoria
 JWT_EXPIRES_IN=7d
+DATABASE_URL=postgresql://auth_user:auth_pass_dev@localhost:5432/auth_api?schema=public
 ```
 
 ## Estructura del proyecto
@@ -40,6 +41,10 @@ JWT_EXPIRES_IN=7d
 ```
 auth-api/
 ├── package.json
+├── docker-compose.yml
+├── prisma/
+│   ├── schema.prisma
+│   └── migrations/
 ├── .env.example
 ├── postman_collection.json
 ├── README.md
@@ -58,7 +63,8 @@ auth-api/
     │   ├── auth.middleware.js
     │   └── error.middleware.js
     ├── store/
-    │   └── memory.store.js
+    │   ├── db.store.js
+    │   └── prisma.js
     └── utils/
         ├── jwt.js
         ├── validators.js
@@ -77,7 +83,7 @@ auth-api/
    expiracion (`JWT_EXPIRES_IN`).
 3. **Middleware de autenticacion** (`src/middleware/auth.middleware.js`):
    en cada request protegida, verifica la firma y expiracion del JWT, y
-   ademas consulta la sesion en memoria: si la sesion fue revocada, o el
+   ademas consulta la sesion en PostgreSQL: si la sesion fue revocada, o el
    dispositivo fue desvinculado, el token deja de ser valido aunque su
    firma siga siendo correcta. Esto es lo que permite una revocacion real
    (no solo basada en la expiracion del JWT).
@@ -192,9 +198,7 @@ Variables de la coleccion:
 
 ## Notas
 
-- Todos los datos (usuarios, dispositivos, sesiones) se guardan en memoria
-  (`Map`) y se pierden al reiniciar el servidor (`npm run dev` / `npm
-  start`).
+- Los datos persisten en PostgreSQL aunque se reinicie el servidor.
 - Las rutas inexistentes devuelven `404` en JSON gracias al middleware
   `notFoundHandler`.
 - Los errores tienen el formato: `{ "error": { "message": "...",

@@ -1,7 +1,7 @@
 {
   "name": "auth-api-local",
   "version": "1.0.0",
-  "description": "API REST de autenticacion con almacenamiento en memoria (sin base de datos)",
+  "description": "API REST de autenticacion con PostgreSQL y Prisma",
   "main": "src/server.js",
   "type": "commonjs",
   "scripts": {
@@ -12,10 +12,13 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
+    "@prisma/client": "^6.19.0",
     "bcryptjs": "^2.4.3",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
-    "jsonwebtoken": "^9.0.2",
-    "uuid": "^9.0.1"
+    "jsonwebtoken": "^9.0.2"
+  },
+  "devDependencies": {
+    "prisma": "^6.19.0"
   }
 }

@@ -1,8 +1,8 @@
 const { verifyToken } = require('../utils/jwt');
 const { AppError } = require('../utils/errors');
-const store = require('../store/memory.store');
+const store = require('../store/db.store');
 
-function authenticate(req, res, next) {
+async function authenticate(req, res, next) {
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -19,17 +19,17 @@ function authenticate(req, res, next) {
 
     const { userId, sessionId, deviceId } = payload;
 
-    const session = store.sessions.get(sessionId);
+    const session = await store.findSessionById(sessionId);
     if (!session || session.revoked || session.userId !== userId || session.deviceId !== deviceId) {
       throw new AppError('La sesion ya no es valida', 401);
     }
 
-    const device = store.devices.get(deviceId);
+    const device = await store.findDeviceById(deviceId);
     if (!device || !device.active || device.userId !== userId) {
       throw new AppError('El dispositivo ya no esta vinculado', 401);
     }
 
-    const user = store.users.get(userId);
+    const user = await store.findUserById(userId);
     if (!user) {
       throw new AppError('El usuario ya no existe', 401);
     }
