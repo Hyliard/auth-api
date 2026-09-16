@@ -91,6 +91,44 @@ function deleteUser(id) {
   return prisma.user.delete({ where: { id } });
 }
 
+function createClient({ userId, name, email, company }) {
+  return prisma.client.create({
+    data: {
+      userId,
+      name,
+      email,
+      company,
+    },
+  });
+}
+
+function getClientsByUser(userId, includeInactive = false) {
+  return prisma.client.findMany({
+    where: {
+      userId,
+      ...(includeInactive ? {} : { active: true }),
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+}
+
+function findClientById(userId, clientId) {
+  return prisma.client.findFirst({ where: { id: clientId, userId } });
+}
+
+async function updateClient(userId, clientId, data) {
+  const result = await prisma.client.updateMany({
+    where: { id: clientId, userId },
+    data,
+  });
+
+  if (result.count === 0) {
+    return null;
+  }
+
+  return findClientById(userId, clientId);
+}
+
 module.exports = {
   toPublicUser,
   createUser,
@@ -106,4 +144,8 @@ module.exports = {
   revokeSessionsByDevice,
   deleteDevice,
   deleteUser,
+  createClient,
+  getClientsByUser,
+  findClientById,
+  updateClient,
 };

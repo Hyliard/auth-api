@@ -8,13 +8,16 @@ datasource db {
 }
 
 model User {
-  id           String    @id @default(uuid()) @db.Uuid
+  id           String     @id @default(uuid()) @db.Uuid
   name         String
-  email        String    @unique
+  email        String     @unique
   passwordHash String
-  createdAt    DateTime  @default(now())
+  createdAt    DateTime   @default(now())
   devices      Device[]
   sessions     Session[]
+  clients      Client[]
+  contracts    Contract[]
+  workLogs     WorkLog[]
 }
 
 model Device {
@@ -41,4 +44,60 @@ model Session {
 
   @@index([userId])
   @@index([deviceId])
+}
+
+model Client {
+  id        String     @id @default(uuid()) @db.Uuid
+  userId    String     @db.Uuid
+  name      String
+  email     String?
+  company   String?
+  active    Boolean    @default(true)
+  createdAt DateTime   @default(now())
+  updatedAt DateTime   @updatedAt
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contracts Contract[]
+
+  @@index([userId])
+}
+
+model Contract {
+  id           String    @id @default(uuid()) @db.Uuid
+  userId       String    @db.Uuid
+  clientId     String    @db.Uuid
+  name         String
+  hourlyRate   Decimal
+  currency     String
+  overtimeRate Decimal?
+  active       Boolean   @default(true)
+  startDate    DateTime? @db.Date
+  endDate      DateTime? @db.Date
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  client       Client    @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  workLogs     WorkLog[]
+
+  @@index([userId])
+  @@index([clientId])
+  @@index([userId, clientId])
+}
+
+model WorkLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @db.Uuid
+  contractId String   @db.Uuid
+  workDate   DateTime @db.Date
+  hours      Decimal
+  isOvertime Boolean  @default(false)
+  note       String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contract   Contract @relation(fields: [contractId], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@index([contractId])
+  @@index([userId, contractId])
+  @@index([userId, workDate])
 }
