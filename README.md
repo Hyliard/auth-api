@@ -282,3 +282,39 @@ migraciones del proyecto y el cliente Prisma generado. Las pruebas no cargan `.e
 rechazan otro nombre de base y eliminan solo los usuarios de prueba que crean.
 No uses una base con datos reales. La coleccion Postman agrega casos de validacion
 en una carpeta separada; no reemplaza estas pruebas automatizadas.
+
+## Raspberry Pi Deployment
+
+El deployment de Raspberry Pi vive en `/home/hyliard/docker/authdemo` y usa
+`docker-compose.pi.yml`. La API se publica en `http://localhost:3004` mediante el
+contenedor `authdemo-api`. PostgreSQL corre en `authdemo-db`, se publica solo en
+`127.0.0.1:5433` y conserva sus datos en el volumen existente
+`authdemo_authdemo_pgdata`.
+
+La Raspberry necesita dos archivos locales que nunca deben entrar en Git:
+
+- `.jwt_secret`: contiene exclusivamente el secreto JWT y debe tener permisos `600`.
+- `.env.pi`: contiene `POSTGRES_USER`, `POSTGRES_PASSWORD` y `POSTGRES_DB` con los
+  valores del deployment. Se crea a partir de `.env.pi.example` sin cambiar las
+  credenciales existentes.
+
+El comando estandar de deployment es:
+
+```bash
+cd /home/hyliard/docker/authdemo
+./scripts/deploy-pi.sh
+```
+
+El script exige un working tree limpio, actualiza `main` mediante fast-forward,
+construye `authdemo-api` (incluido `prisma generate`), ejecuta
+`prisma migrate deploy` desde la imagen nueva, recrea solo la API y comprueba:
+
+```bash
+curl --fail http://127.0.0.1:3004/api/health
+```
+
+En produccion se usa exclusivamente `prisma migrate deploy`. No deben utilizarse
+`prisma migrate dev` ni `prisma migrate reset`, y nunca debe eliminarse el volumen
+PostgreSQL. La imagen actual basada en `node:20-bookworm-slim` genera correctamente
+Prisma Client, pero Prisma muestra una advertencia no fatal al detectar OpenSSL;
+instalar OpenSSL explicitamente en la imagen queda como mejora pendiente.

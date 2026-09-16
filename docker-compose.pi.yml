@@ -1,0 +1,35 @@
+name: authdemo
+
+services:
+  authdemo-db:
+    image: postgres:16
+    container_name: authdemo-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?}
+      POSTGRES_DB: ${POSTGRES_DB:?}
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - authdemo_pgdata:/var/lib/postgresql/data
+
+  authdemo-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: authdemo-api
+    restart: unless-stopped
+    depends_on:
+      - authdemo-db
+    environment:
+      PORT: 3000
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@authdemo-db:5432/${POSTGRES_DB}?schema=public
+      JWT_SECRET: ${JWT_SECRET:?}
+      JWT_EXPIRES_IN: 7d
+    ports:
+      - "3004:3000"
+
+volumes:
+  authdemo_pgdata:
+    name: authdemo_authdemo_pgdata
