@@ -1,14 +1,12 @@
 const bcrypt = require('bcryptjs');
 const { AppError } = require('../utils/errors');
 const store = require('../store/db.store');
+const { validateBody, validatePassword } = require('../utils/validators');
 
 async function deleteAccount(req, res, next) {
   try {
-    const { password } = req.body || {};
-
-    if (!password) {
-      throw new AppError('El campo password es obligatorio', 400);
-    }
+    const { password } = validateBody(req.body);
+    validatePassword(password);
 
     const user = await store.findUserById(req.auth.userId);
     if (!user) {

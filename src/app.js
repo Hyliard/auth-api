@@ -1,5 +1,3 @@
-require('dotenv').config();
-
 const express = require('express');
 const authRoutes = require('./routes/auth.routes');
 const deviceRoutes = require('./routes/device.routes');
@@ -8,6 +6,8 @@ const { notFoundHandler, errorHandler } = require('./middleware/error.middleware
 
 const app = express();
 
+// Only change this to an explicit trusted proxy/network after configuring deployment.
+app.set('trust proxy', false);
 app.use(express.json());
 
 app.get('/api/health', (req, res) => {

@@ -1,6 +1,6 @@
 const bcrypt = require('bcryptjs');
 const { AppError } = require('../utils/errors');
-const { isValidEmail, isValidPassword } = require('../utils/validators');
+const { validateBody, validateString, validateEmail, validatePassword } = require('../utils/validators');
 const { signToken } = require('../utils/jwt');
 const store = require('../store/db.store');
 
@@ -8,19 +8,10 @@ const SALT_ROUNDS = 10;
 
 async function register(req, res, next) {
   try {
-    const { name, email, password } = req.body || {};
-
-    if (!name || !email || !password) {
-      throw new AppError('Los campos name, email y password son obligatorios', 400);
-    }
-    if (!isValidEmail(email)) {
-      throw new AppError('El formato del email no es valido', 400);
-    }
-    if (!isValidPassword(password)) {
-      throw new AppError('La contrasena debe tener un minimo de 8 caracteres', 400);
-    }
-
-    const normalizedEmail = email.toLowerCase().trim();
+    const { name, email, password } = validateBody(req.body);
+    const normalizedName = validateString(name, 'name');
+    const normalizedEmail = validateEmail(email);
+    validatePassword(password);
 
     if (await store.findUserByEmail(normalizedEmail)) {
       throw new AppError('Ya existe un usuario registrado con ese email', 409);
@@ -28,7 +19,7 @@ async function register(req, res, next) {
 
     const passwordHash = await bcrypt.hash(password, SALT_ROUNDS);
     const user = await store.createUser({
-      name: name.trim(),
+      name: normalizedName,
       email: normalizedEmail,
       passwordHash,
     });
@@ -41,13 +32,11 @@ async function register(req, res, next) {
 
 async function login(req, res, next) {
   try {
-    const { email, password, deviceName } = req.body || {};
-
-    if (!email || !password) {
-      throw new AppError('Los campos email y password son obligatorios', 400);
-    }
-
-    const normalizedEmail = email.toLowerCase().trim();
+    const { email, password, deviceName } = validateBody(req.body);
+    const normalizedEmail = validateEmail(email);
+    validatePassword(password);
+    const normalizedDeviceName = deviceName === undefined
+      ? 'Dispositivo sin nombre' : validateString(deviceName, 'deviceName');
     const user = await store.findUserByEmail(normalizedEmail);
 
     if (!user) {
@@ -60,15 +49,11 @@ async function login(req, res, next) {
     }
 
     const now = new Date();
-    const device = await store.createDevice({
+    const { device, session } = await store.createLoginSession({
       userId: user.id,
-      deviceName: typeof deviceName === 'string' && deviceName.trim() ? deviceName.trim() : 'Dispositivo sin nombre',
+      expectedPasswordHash: user.passwordHash,
+      deviceName: normalizedDeviceName,
       lastLoginAt: now,
-    });
-
-    const session = await store.createSession({
-      userId: user.id,
-      deviceId: device.deviceId,
     });
 
     const token = signToken({ userId: user.id, sessionId: session.sessionId, deviceId: device.deviceId });
@@ -97,14 +82,9 @@ async function me(req, res, next) {
 
 async function changePassword(req, res, next) {
   try {
-    const { currentPassword, newPassword } = req.body || {};
-
-    if (!currentPassword || !newPassword) {
-      throw new AppError('Los campos currentPassword y newPassword son obligatorios', 400);
-    }
-    if (!isValidPassword(newPassword)) {
-      throw new AppError('La nueva contrasena debe tener un minimo de 8 caracteres', 400);
-    }
+    const { currentPassword, newPassword } = validateBody(req.body);
+    validatePassword(currentPassword, 'currentPassword');
+    validatePassword(newPassword, 'newPassword');
 
     const user = await store.findUserById(req.auth.userId);
     if (!user) {
@@ -122,8 +102,7 @@ async function changePassword(req, res, next) {
     }
 
     const passwordHash = await bcrypt.hash(newPassword, SALT_ROUNDS);
-    await store.updateUserPassword(user.id, passwordHash);
-    await store.revokeSessionsByUser(user.id);
+    await store.changePasswordAndRevokeSessions(user.id, user.passwordHash, passwordHash);
 
     res.status(200).json({
       message: 'Contrasena actualizada correctamente. Todas las sesiones fueron cerradas, inicia sesion nuevamente.',

@@ -1,5 +1,6 @@
 const { AppError } = require('../utils/errors');
 const store = require('../store/db.store');
+const { validateUuid } = require('../utils/validators');
 
 async function listDevices(req, res, next) {
   try {
@@ -20,7 +21,7 @@ async function listDevices(req, res, next) {
 
 async function unlinkDevice(req, res, next) {
   try {
-    const { deviceId } = req.params;
+    const deviceId = validateUuid(req.params.deviceId, 'deviceId');
     const device = await store.findDeviceById(deviceId);
 
     if (!device || device.userId !== req.auth.userId) {

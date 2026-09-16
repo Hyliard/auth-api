@@ -1,15 +1,17 @@
 const { verifyToken } = require('../utils/jwt');
 const { AppError } = require('../utils/errors');
 const store = require('../store/db.store');
+const { isValidUuid } = require('../utils/validators');
 
 async function authenticate(req, res, next) {
   try {
     const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    const match = typeof authHeader === 'string' && /^Bearer ([^\s]+)$/i.exec(authHeader);
+    if (!match) {
       throw new AppError('Token de autenticacion no proporcionado', 401);
     }
 
-    const token = authHeader.split(' ')[1];
+    const token = match[1];
     let payload;
     try {
       payload = verifyToken(token);
@@ -17,7 +19,10 @@ async function authenticate(req, res, next) {
       throw new AppError('Token invalido o expirado', 401);
     }
 
-    const { userId, sessionId, deviceId } = payload;
+    const { userId, sessionId, deviceId } = payload || {};
+    if (![userId, sessionId, deviceId].every(isValidUuid)) {
+      throw new AppError('Token invalido o expirado', 401);
+    }
 
     const session = await store.findSessionById(sessionId);
     if (!session || session.revoked || session.userId !== userId || session.deviceId !== deviceId) {
