@@ -133,6 +133,98 @@ test('Phase 1 against isolated PostgreSQL', { timeout: 60000 }, async (t) => {
     assert.equal((await request('GET', '/api/auth/me', undefined, session.token)).status, 401);
   });
 
+  await t.test('contract CRUD, validation, ownership, filters and archive', async () => {
+    const owner = await fixture('contract-owner');
+    const other = await fixture('contract-other');
+    const session = await login(owner);
+    const otherSession = await login(other);
+    const client = await store.createClient({ userId: owner.id, name: 'Primary Client', email: null, company: 'Primary Co' });
+    const secondClient = await store.createClient({ userId: owner.id, name: 'Second Client', email: null, company: null });
+    const inactiveClient = await store.createClient({ userId: owner.id, name: 'Inactive Client', email: null, company: null });
+    await store.updateClient(owner.id, inactiveClient.id, { active: false });
+    const otherClient = await store.createClient({ userId: other.id, name: 'Other Client', email: null, company: null });
+    const payload = {
+      clientId: client.id,
+      name: 'Backend Contract',
+      hourlyRate: '45.50',
+      currency: 'usd',
+      overtimeRate: '67.75',
+      startDate: '2026-09-01',
+      endDate: '2026-12-31',
+    };
+
+    let response = await request('POST', '/api/contracts', payload, session.token);
+    assert.equal(response.status, 201);
+    assert.equal(response.body.contract.userId, undefined);
+    assert.equal(response.body.contract.hourlyRate, '45.5');
+    assert.equal(response.body.contract.overtimeRate, '67.75');
+    assert.equal(response.body.contract.currency, 'USD');
+    assert.equal(response.body.contract.startDate, '2026-09-01');
+    assert.deepEqual(response.body.contract.client, { id: client.id, name: client.name, company: client.company });
+    const contractId = response.body.contract.id;
+
+    response = await request('GET', '/api/contracts', undefined, session.token);
+    assert.equal(response.status, 200);
+    assert.equal(response.body.contracts.some((contract) => contract.id === contractId), true);
+    assert.equal((await request('GET', `/api/contracts/${contractId}`, undefined, session.token)).status, 200);
+    response = await request('GET', `/api/contracts?clientId=${client.id}`, undefined, session.token);
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body.contracts.map((contract) => contract.id), [contractId]);
+    assert.equal((await request('GET', `/api/contracts?clientId=${otherClient.id}`, undefined, session.token)).status, 404);
+
+    response = await request('PATCH', `/api/contracts/${contractId}`, {
+      clientId: secondClient.id,
+      hourlyRate: '50.25',
+      overtimeRate: null,
+      endDate: null,
+    }, session.token);
+    assert.equal(response.status, 200);
+    assert.equal(response.body.contract.clientId, secondClient.id);
+    assert.equal(response.body.contract.hourlyRate, '50.25');
+    assert.equal(response.body.contract.overtimeRate, null);
+    assert.equal(response.body.contract.endDate, null);
+
+    const otherContract = await request('POST', '/api/contracts', {
+      clientId: otherClient.id, name: 'Other Contract', hourlyRate: '20', currency: 'EUR',
+    }, otherSession.token);
+    assert.equal(otherContract.status, 201);
+    for (const method of ['GET', 'PATCH', 'DELETE']) {
+      const body = method === 'PATCH' ? { name: 'Forbidden' } : undefined;
+      assert.equal((await request(method, `/api/contracts/${otherContract.body.contract.id}`, body, session.token)).status, 404);
+    }
+
+    assert.equal((await request('POST', '/api/contracts', { ...payload, clientId: otherClient.id }, session.token)).status, 404);
+    assert.equal((await request('POST', '/api/contracts', { ...payload, clientId: inactiveClient.id }, session.token)).status, 409);
+    assert.equal((await request('PATCH', `/api/contracts/${contractId}`, { clientId: inactiveClient.id }, session.token)).status, 409);
+    assert.equal((await request('POST', '/api/contracts', { ...payload, clientId: 'not-a-uuid' }, session.token)).status, 400);
+    assert.equal((await request('GET', '/api/contracts?clientId=not-a-uuid', undefined, session.token)).status, 400);
+    for (const method of ['GET', 'PATCH', 'DELETE']) {
+      const body = method === 'PATCH' ? { name: 'Invalid' } : undefined;
+      assert.equal((await request(method, '/api/contracts/not-a-uuid', body, session.token)).status, 400);
+    }
+    for (const hourlyRate of ['0', '-1']) {
+      assert.equal((await request('POST', '/api/contracts', { ...payload, hourlyRate }, session.token)).status, 400);
+    }
+    assert.equal((await request('POST', '/api/contracts', { ...payload, overtimeRate: '-0.01' }, session.token)).status, 400);
+    assert.equal((await request('POST', '/api/contracts', { ...payload, currency: 'US' }, session.token)).status, 400);
+    assert.equal((await request('POST', '/api/contracts', { ...payload, startDate: '2026-02-30' }, session.token)).status, 400);
+    assert.equal((await request('POST', '/api/contracts', { ...payload, endDate: '2026-08-31' }, session.token)).status, 400);
+    assert.equal((await request('POST', '/api/contracts', { ...payload, userId: owner.id }, session.token)).status, 400);
+    assert.equal((await request('PATCH', `/api/contracts/${contractId}`, {}, session.token)).status, 400);
+    assert.equal((await request('PATCH', `/api/contracts/${contractId}`, { startDate: '2027-01-01', endDate: '2026-12-31' }, session.token)).status, 400);
+
+    response = await request('DELETE', `/api/contracts/${contractId}`, undefined, session.token);
+    assert.equal(response.status, 200);
+    assert.equal(response.body.contract.active, false);
+    response = await request('GET', '/api/contracts', undefined, session.token);
+    assert.equal(response.body.contracts.some((contract) => contract.id === contractId), false);
+    response = await request('GET', '/api/contracts?includeInactive=true', undefined, session.token);
+    assert.equal(response.body.contracts.some((contract) => contract.id === contractId && !contract.active), true);
+    response = await request('PATCH', `/api/contracts/${contractId}`, { active: true }, session.token);
+    assert.equal(response.status, 200);
+    assert.equal(response.body.contract.active, true);
+  });
+
   await t.test('pending login using old password fails after password change', async (st) => {
     const user = await fixture('race');
     const existing = await login(user);

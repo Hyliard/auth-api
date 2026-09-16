@@ -8,6 +8,8 @@
     { "key": "baseUrl", "value": "http://localhost:3000", "type": "string" },
     { "key": "token", "value": "", "type": "string" },
     { "key": "deviceId", "value": "", "type": "string" },
+    { "key": "clientId", "value": "", "type": "string" },
+    { "key": "contractId", "value": "", "type": "string" },
     { "key": "otherDeviceId", "value": "", "type": "string" },
     { "key": "otherToken", "value": "", "type": "string" }
   ],
@@ -109,6 +111,105 @@
         "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
         "url": { "raw": "{{baseUrl}}/api/devices", "host": ["{{baseUrl}}"], "path": ["api", "devices"] }
       }
+    },
+    {
+      "name": "Contracts CRUD",
+      "description": "Ejecutar con un token vigente. Crea un Client temporal y guarda clientId/contractId como variables de coleccion.",
+      "item": [
+        {
+          "name": "Create Client for Contract",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "type": "text/javascript",
+              "exec": [
+                "pm.response.to.have.status(201);",
+                "const data = pm.response.json();",
+                "pm.collectionVariables.set('clientId', data.client.id);"
+              ]
+            }
+          }],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"name\": \"Contract Client\",\n  \"company\": \"Example Co\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/clients", "host": ["{{baseUrl}}"], "path": ["api", "clients"] }
+          }
+        },
+        {
+          "name": "Create Contract",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "type": "text/javascript",
+              "exec": [
+                "pm.response.to.have.status(201);",
+                "const data = pm.response.json();",
+                "pm.collectionVariables.set('contractId', data.contract.id);"
+              ]
+            }
+          }],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"clientId\": \"{{clientId}}\",\n  \"name\": \"Backend Contract\",\n  \"hourlyRate\": \"45.50\",\n  \"currency\": \"USD\",\n  \"overtimeRate\": \"67.75\",\n  \"startDate\": \"2026-09-01\",\n  \"endDate\": null\n}"
+            },
+            "url": { "raw": "{{baseUrl}}/api/contracts", "host": ["{{baseUrl}}"], "path": ["api", "contracts"] }
+          }
+        },
+        {
+          "name": "List Contracts",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/contracts", "host": ["{{baseUrl}}"], "path": ["api", "contracts"] }
+          }
+        },
+        {
+          "name": "Get Contract",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/contracts/{{contractId}}", "host": ["{{baseUrl}}"], "path": ["api", "contracts", "{{contractId}}"] }
+          }
+        },
+        {
+          "name": "Update Contract",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"hourlyRate\": \"50.25\",\n  \"overtimeRate\": null\n}" },
+            "url": { "raw": "{{baseUrl}}/api/contracts/{{contractId}}", "host": ["{{baseUrl}}"], "path": ["api", "contracts", "{{contractId}}"] }
+          }
+        },
+        {
+          "name": "Archive Contract",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/contracts/{{contractId}}", "host": ["{{baseUrl}}"], "path": ["api", "contracts", "{{contractId}}"] }
+          }
+        },
+        {
+          "name": "List Contracts including inactive",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/contracts?includeInactive=true", "host": ["{{baseUrl}}"], "path": ["api", "contracts"], "query": [{ "key": "includeInactive", "value": "true" }] }
+          }
+        }
+      ]
     },
     {
       "name": "Unlink Other Device",

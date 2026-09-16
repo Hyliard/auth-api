@@ -129,6 +129,43 @@ async function updateClient(userId, clientId, data) {
   return findClientById(userId, clientId);
 }
 
+const contractClientSelect = { id: true, name: true, company: true };
+
+function createContract({ userId, clientId, name, hourlyRate, currency, overtimeRate, startDate, endDate }) {
+  return prisma.contract.create({
+    data: { userId, clientId, name, hourlyRate, currency, overtimeRate, startDate, endDate },
+    include: { client: { select: contractClientSelect } },
+  });
+}
+
+function getContractsByUser(userId, { includeInactive = false, clientId } = {}) {
+  return prisma.contract.findMany({
+    where: {
+      userId,
+      ...(includeInactive ? {} : { active: true }),
+      ...(clientId ? { clientId } : {}),
+    },
+    include: { client: { select: contractClientSelect } },
+    orderBy: { createdAt: 'desc' },
+  });
+}
+
+function findContractById(userId, contractId) {
+  return prisma.contract.findFirst({
+    where: { id: contractId, userId },
+    include: { client: { select: contractClientSelect } },
+  });
+}
+
+async function updateContract(userId, contractId, data) {
+  const result = await prisma.contract.updateMany({
+    where: { id: contractId, userId },
+    data,
+  });
+  if (result.count === 0) return null;
+  return findContractById(userId, contractId);
+}
+
 module.exports = {
   toPublicUser,
   createUser,
@@ -148,4 +185,8 @@ module.exports = {
   getClientsByUser,
   findClientById,
   updateClient,
+  createContract,
+  getContractsByUser,
+  findContractById,
+  updateContract,
 };

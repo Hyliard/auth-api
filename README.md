@@ -132,6 +132,30 @@ auth-api/
 | GET | /api/devices | Si | Listar dispositivos vinculados |
 | DELETE | /api/devices/:deviceId | Si | Desvincular dispositivo |
 | DELETE | /api/users/me | Si | Eliminar cuenta |
+| POST | /api/clients | Si | Crear cliente |
+| GET | /api/clients | Si | Listar clientes activos |
+| GET | /api/clients/:clientId | Si | Obtener cliente |
+| PATCH | /api/clients/:clientId | Si | Editar o reactivar cliente |
+| DELETE | /api/clients/:clientId | Si | Archivar cliente |
+| POST | /api/contracts | Si | Crear contrato |
+| GET | /api/contracts | Si | Listar contratos activos y filtrar por cliente |
+| GET | /api/contracts/:contractId | Si | Obtener contrato |
+| PATCH | /api/contracts/:contractId | Si | Editar o reactivar contrato |
+| DELETE | /api/contracts/:contractId | Si | Archivar contrato |
+
+### Contracts
+
+Los contratos siempre pertenecen al usuario autenticado y a uno de sus Clients
+activos. Un Client archivado conserva sus Contracts existentes, pero no puede
+recibir contratos nuevos. `DELETE /api/contracts/:contractId` es un soft delete;
+`GET /api/contracts?includeInactive=true` incluye contratos archivados y
+`GET /api/contracts?clientId=UUID` filtra por un Client propio.
+
+Los importes se envian preferentemente como strings decimales y se devuelven como
+strings para conservar precision. `currency` usa tres letras y se normaliza a
+mayusculas. Las fechas opcionales usan `YYYY-MM-DD`, y `endDate` no puede ser
+anterior a `startDate`. Las respuestas incluyen `client.id`, `client.name` y
+`client.company`, pero no exponen `userId` ni incluyen WorkLogs.
 
 ## Ejemplos con curl
 
