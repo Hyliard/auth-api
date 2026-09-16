@@ -13,6 +13,7 @@ Los usuarios, dispositivos y sesiones persisten en PostgreSQL.
 ```bash
 npm install
 cp .env.example .env
+# Completar JWT_SECRET con un secreto aleatorio propio antes de iniciar.
 npx prisma migrate dev
 npm run dev
 ```
@@ -22,6 +23,7 @@ o para produccion/simple:
 ```bash
 npm install
 cp .env.example .env
+# Completar JWT_SECRET con un secreto aleatorio propio antes de iniciar.
 npm start
 ```
 
@@ -31,10 +33,22 @@ Variables de entorno (`.env`):
 
 ```
 PORT=3000
-JWT_SECRET=cambia_este_secreto_por_una_cadena_larga_y_aleatoria
+JWT_SECRET=
 JWT_EXPIRES_IN=7d
 DATABASE_URL=postgresql://auth_user:auth_pass_dev@localhost:5432/auth_api?schema=public
 ```
+
+`JWT_SECRET` queda vacio a proposito: el servidor no inicia hasta configurarlo.
+Genera un valor aleatorio con `node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"`
+y copialo en `.env`. Debe tener al menos 32 caracteres; se rechazan placeholders.
+No compartas ese valor ni lo incluyas en Postman o en el repositorio.
+
+Antes de escuchar conexiones se valida `DATABASE_URL` (URL PostgreSQL con host y base),
+`JWT_SECRET`, `PORT` (entero de 1 a 65535, por defecto 3000 si se omite) y
+`JWT_EXPIRES_IN` (entero positivo con unidad `ms`, `s`, `m`, `h`, `d`, `w` o `y`,
+con duracion minima de un segundo; por defecto `7d` si se omite).
+Valores vacios o invalidos hacen terminar el proceso con codigo 1 y un mensaje
+que identifica el campo sin mostrar su valor. Esta validacion no comprueba conectividad a PostgreSQL.
 
 ## Estructura del proyecto
 
@@ -90,6 +104,11 @@ auth-api/
 4. **Cambio de contrasena**: al cambiarla, se revocan **todas** las
    sesiones del usuario (incluida la que se uso para hacer el cambio), asi
    que hace falta volver a iniciar sesion despues.
+   Login y cambio de contrasena coordinan sus escrituras con un bloqueo de la fila
+   del usuario dentro de transacciones PostgreSQL. El login vuelve a comprobar el
+   hash bajo ese bloqueo; un login pendiente con credenciales anteriores devuelve
+   `401` si el cambio ya se completo. Si el login escribe primero, su sesion queda
+   incluida en la revocacion posterior. Hash y revocacion se confirman juntos.
 5. **Desvincular dispositivo** (`DELETE /api/devices/:deviceId`): borra el
    dispositivo y revoca la(s) sesion(es) asociadas a el. Si el dispositivo
    desvinculado es el que uso la request actual, la respuesta lo indica
@@ -203,3 +222,63 @@ Variables de la coleccion:
   `notFoundHandler`.
 - Los errores tienen el formato: `{ "error": { "message": "...",
   "statusCode": 400 } }`.
+
+## Hardening Fase 1: entradas y limites
+
+- Los cuerpos de registro, login, cambio de contrasena, eliminacion de cuenta y
+  creacion/edicion de clientes deben ser objetos JSON. Tipos incorrectos, campos
+  requeridos ausentes y JSON malformado devuelven `400`.
+- `name` y `deviceName`: texto no vacio, hasta 200 caracteres despues de quitar
+  espacios externos. `deviceName` sigue siendo opcional; si se envia, debe ser valido.
+- Email: texto con formato valido y hasta 254 caracteres. Los emails de usuarios
+  siguen normalizandose a minusculas.
+- `password`, `currentPassword` y `newPassword`: minimo 8 caracteres, maximo
+  **72 bytes UTF-8**, y no pueden ser solo espacios. No se recortan ni normalizan
+  contrasenas. Una contrasena antigua que exceda ese limite ahora devuelve `400`.
+- En clientes, `email` y `company` siguen siendo opcionales: omitidos, `null` o
+  texto vacio se guardan como `null`. Los textos tienen un maximo de 254 caracteres;
+  `active` debe ser booleano y los campos protegidos/desconocidos se rechazan.
+- `clientId` y `deviceId` deben ser UUID con guiones. Un formato invalido devuelve
+  `400`; un UUID valido inexistente o ajeno mantiene `404`. Claims UUID invalidos
+  dentro de un JWT devuelven `401` antes de consultar Prisma.
+- Un email duplicado devuelve `409`, incluso con registros simultaneos.
+- Los errores del servidor se registran con metadatos seguros, sin cuerpos,
+  credenciales, tokens, mensajes internos arbitrarios ni stack traces.
+
+Los limites de autenticacion usan ventanas de **15 minutos**:
+
+| Operacion | Limite | Clave |
+|---|---|---|
+| Registro | 10 solicitudes | IP |
+| Login | 30 solicitudes | IP |
+| Cambio de contrasena y eliminacion de cuenta | 10 solicitudes combinadas | Usuario autenticado |
+
+Se cuentan solicitudes exitosas e invalidas que llegan al limitador. El exceso
+devuelve `429` con el formato habitual de error, `Retry-After` y cabeceras `RateLimit`.
+El cliente debe esperar el tiempo indicado antes de reintentar. No hay limite global
+para consultas de clientes, dispositivos o `/api/auth/me`. IPv6 se agrupa por subred
+con la configuracion predeterminada de la libreria.
+
+Los contadores estan en memoria, son locales a cada proceso y se reinician al
+reiniciar la API. Son apropiados para una instancia pequena; varias replicas
+necesitarian compartir el almacenamiento del limitador.
+
+`trust proxy` permanece en `false`: enviar `X-Forwarded-For` no permite cambiar la
+IP usada por el limitador. Antes de desplegar detras de un reverse proxy, configura
+solo sus IP/subredes de confianza y bloquea accesos directos que eviten el proxy.
+No uses `trust proxy: true` indiscriminadamente. Sin ese ajuste, todos los clientes
+del proxy compartirian su limite por IP.
+
+## Pruebas de Fase 1
+
+`npm test` ejecuta validaciones, logging seguro, rate limiting HTTP, traduccion
+de errores y arranque del servidor sin necesitar PostgreSQL.
+
+`TEST_DATABASE_URL='postgresql://USUARIO:CLAVE@HOST:PUERTO/auth_api_phase1_test' npm run test:integration`
+ejecuta compatibilidad HTTP, aislamiento de usuarios, registros concurrentes,
+concurrencia login/cambio de contrasena con bloqueo PostgreSQL real y rollback.
+Prepara previamente una base **aislada** llamada `auth_api_phase1_test` con las
+migraciones del proyecto y el cliente Prisma generado. Las pruebas no cargan `.env`,
+rechazan otro nombre de base y eliminan solo los usuarios de prueba que crean.
+No uses una base con datos reales. La coleccion Postman agrega casos de validacion
+en una carpeta separada; no reemplaza estas pruebas automatizadas.
