@@ -10,6 +10,7 @@
     { "key": "deviceId", "value": "", "type": "string" },
     { "key": "clientId", "value": "", "type": "string" },
     { "key": "contractId", "value": "", "type": "string" },
+    { "key": "workLogId", "value": "", "type": "string" },
     { "key": "otherDeviceId", "value": "", "type": "string" },
     { "key": "otherToken", "value": "", "type": "string" }
   ],
@@ -207,6 +208,124 @@
             "method": "GET",
             "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
             "url": { "raw": "{{baseUrl}}/api/contracts?includeInactive=true", "host": ["{{baseUrl}}"], "path": ["api", "contracts"], "query": [{ "key": "includeInactive", "value": "true" }] }
+          }
+        }
+      ]
+    },
+    {
+      "name": "WorkLogs CRUD",
+      "description": "Requiere token y contractId de un Contract propio activo. Guarda workLogId automaticamente.",
+      "item": [
+        {
+          "name": "Create active Contract for WorkLog",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "type": "text/javascript",
+              "exec": [
+                "pm.response.to.have.status(201);",
+                "const data = pm.response.json();",
+                "pm.collectionVariables.set('contractId', data.contract.id);"
+              ]
+            }
+          }],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"clientId\": \"{{clientId}}\",\n  \"name\": \"WorkLog Contract\",\n  \"hourlyRate\": \"45.50\",\n  \"currency\": \"USD\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/contracts", "host": ["{{baseUrl}}"], "path": ["api", "contracts"] }
+          }
+        },
+        {
+          "name": "Create WorkLog",
+          "event": [{
+            "listen": "test",
+            "script": {
+              "type": "text/javascript",
+              "exec": [
+                "pm.response.to.have.status(201);",
+                "const data = pm.response.json();",
+                "pm.collectionVariables.set('workLogId', data.workLog.id);"
+              ]
+            }
+          }],
+          "request": {
+            "method": "POST",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"contractId\": \"{{contractId}}\",\n  \"workDate\": \"2026-09-17\",\n  \"hours\": \"8.00\",\n  \"isOvertime\": false,\n  \"note\": \"Backend implementation\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/worklogs", "host": ["{{baseUrl}}"], "path": ["api", "worklogs"] }
+          }
+        },
+        {
+          "name": "List WorkLogs with filters",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": {
+              "raw": "{{baseUrl}}/api/worklogs?contractId={{contractId}}&from=2026-09-01&to=2026-09-30&isOvertime=false",
+              "host": ["{{baseUrl}}"],
+              "path": ["api", "worklogs"],
+              "query": [
+                { "key": "contractId", "value": "{{contractId}}" },
+                { "key": "from", "value": "2026-09-01" },
+                { "key": "to", "value": "2026-09-30" },
+                { "key": "isOvertime", "value": "false" }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get WorkLog",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/worklogs/{{workLogId}}", "host": ["{{baseUrl}}"], "path": ["api", "worklogs", "{{workLogId}}"] }
+          }
+        },
+        {
+          "name": "Update WorkLog",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"hours\": \"7.5\",\n  \"note\": \"Corrected entry\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/worklogs/{{workLogId}}", "host": ["{{baseUrl}}"], "path": ["api", "worklogs", "{{workLogId}}"] }
+          }
+        },
+        {
+          "name": "Archive WorkLog",
+          "request": {
+            "method": "DELETE",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/worklogs/{{workLogId}}", "host": ["{{baseUrl}}"], "path": ["api", "worklogs", "{{workLogId}}"] }
+          }
+        },
+        {
+          "name": "List WorkLogs including inactive",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/worklogs?includeInactive=true", "host": ["{{baseUrl}}"], "path": ["api", "worklogs"], "query": [{ "key": "includeInactive", "value": "true" }] }
+          }
+        },
+        {
+          "name": "Reactivate WorkLog",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              { "key": "Content-Type", "value": "application/json" },
+              { "key": "Authorization", "value": "Bearer {{token}}" }
+            ],
+            "body": { "mode": "raw", "raw": "{\n  \"active\": true\n}" },
+            "url": { "raw": "{{baseUrl}}/api/worklogs/{{workLogId}}", "host": ["{{baseUrl}}"], "path": ["api", "worklogs", "{{workLogId}}"] }
           }
         }
       ]

@@ -166,6 +166,65 @@ async function updateContract(userId, contractId, data) {
   return findContractById(userId, contractId);
 }
 
+const workLogContractSelect = {
+  id: true,
+  name: true,
+  hourlyRate: true,
+  currency: true,
+  client: { select: contractClientSelect },
+};
+
+function createWorkLog({ userId, contractId, workDate, hours, isOvertime, note }) {
+  return prisma.workLog.create({
+    data: {
+      userId,
+      contractId,
+      workDate,
+      hours,
+      ...(isOvertime !== undefined ? { isOvertime } : {}),
+      ...(note !== undefined ? { note } : {}),
+    },
+    include: { contract: { select: workLogContractSelect } },
+  });
+}
+
+function getWorkLogsByUser(userId, {
+  includeInactive = false, contractId, from, to, isOvertime,
+} = {}) {
+  return prisma.workLog.findMany({
+    where: {
+      userId,
+      ...(includeInactive ? {} : { active: true }),
+      ...(contractId ? { contractId } : {}),
+      ...((from || to) ? {
+        workDate: {
+          ...(from ? { gte: from } : {}),
+          ...(to ? { lte: to } : {}),
+        },
+      } : {}),
+      ...(isOvertime !== undefined ? { isOvertime } : {}),
+    },
+    include: { contract: { select: workLogContractSelect } },
+    orderBy: [{ workDate: 'desc' }, { createdAt: 'desc' }],
+  });
+}
+
+function findWorkLogById(userId, workLogId) {
+  return prisma.workLog.findFirst({
+    where: { id: workLogId, userId },
+    include: { contract: { select: workLogContractSelect } },
+  });
+}
+
+async function updateWorkLog(userId, workLogId, data) {
+  const result = await prisma.workLog.updateMany({
+    where: { id: workLogId, userId },
+    data,
+  });
+  if (result.count === 0) return null;
+  return findWorkLogById(userId, workLogId);
+}
+
 module.exports = {
   toPublicUser,
   createUser,
@@ -189,4 +248,8 @@ module.exports = {
   getContractsByUser,
   findContractById,
   updateContract,
+  createWorkLog,
+  getWorkLogsByUser,
+  findWorkLogById,
+  updateWorkLog,
 };

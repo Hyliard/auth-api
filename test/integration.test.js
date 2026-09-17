@@ -225,6 +225,131 @@ test('Phase 1 against isolated PostgreSQL', { timeout: 60000 }, async (t) => {
     assert.equal(response.body.contract.active, true);
   });
 
+  await t.test('worklog CRUD, soft delete, validation, ownership and combined filters', async () => {
+    const owner = await fixture('worklog-owner');
+    const other = await fixture('worklog-other');
+    const session = await login(owner);
+    const otherSession = await login(other);
+    const client = await store.createClient({ userId: owner.id, name: 'WorkLog Client', email: null, company: 'WorkLog Co' });
+    const otherClient = await store.createClient({ userId: other.id, name: 'Other WorkLog Client', email: null, company: null });
+    const contract = await store.createContract({
+      userId: owner.id, clientId: client.id, name: 'WorkLog Contract', hourlyRate: '40', currency: 'USD',
+    });
+    const inactiveContract = await store.createContract({
+      userId: owner.id, clientId: client.id, name: 'Inactive WorkLog Contract', hourlyRate: '50', currency: 'USD',
+    });
+    await store.updateContract(owner.id, inactiveContract.id, { active: false });
+    const otherContract = await store.createContract({
+      userId: other.id, clientId: otherClient.id, name: 'Other WorkLog Contract', hourlyRate: '30', currency: 'EUR',
+    });
+    const payload = {
+      contractId: contract.id,
+      workDate: '2026-09-17',
+      hours: '8.00',
+      isOvertime: false,
+      note: '  Backend implementation  ',
+    };
+
+    let response = await request('POST', '/api/worklogs', payload, session.token);
+    assert.equal(response.status, 201);
+    assert.equal(response.body.workLog.userId, undefined);
+    assert.equal(response.body.workLog.hours, '8');
+    assert.equal(response.body.workLog.workDate, '2026-09-17');
+    assert.equal(response.body.workLog.note, 'Backend implementation');
+    assert.equal(response.body.workLog.active, true);
+    assert.equal(response.body.workLog.deletedAt, null);
+    assert.equal(response.body.workLog.contract.hourlyRate, '40');
+    assert.deepEqual(response.body.workLog.contract.client, { id: client.id, name: client.name, company: client.company });
+    const workLogId = response.body.workLog.id;
+
+    response = await request('POST', '/api/worklogs', { ...payload, note: '' }, session.token);
+    assert.equal(response.status, 201);
+    assert.equal(response.body.workLog.note, null);
+    const sameDayId = response.body.workLog.id;
+    response = await request('POST', '/api/worklogs', {
+      ...payload, workDate: '2026-09-20', hours: '2.5', isOvertime: true, note: null,
+    }, session.token);
+    assert.equal(response.status, 201);
+    const overtimeId = response.body.workLog.id;
+    response = await request('POST', '/api/worklogs', {
+      ...payload, workDate: '2026-10-01', hours: '4', note: 'October',
+    }, session.token);
+    assert.equal(response.status, 201);
+    const octoberId = response.body.workLog.id;
+
+    response = await request('GET', '/api/worklogs', undefined, session.token);
+    assert.equal(response.status, 200);
+    assert.equal(response.body.workLogs.some((workLog) => workLog.id === workLogId), true);
+    assert.equal((await request('GET', `/api/worklogs/${workLogId}`, undefined, session.token)).status, 200);
+    response = await request('PATCH', `/api/worklogs/${workLogId}`, { hours: '7.5', note: 'Corrected' }, session.token);
+    assert.equal(response.status, 200);
+    assert.equal(response.body.workLog.hours, '7.5');
+
+    for (const [query, expectedIds] of [
+      [`contractId=${contract.id}`, [workLogId, sameDayId, overtimeId, octoberId]],
+      ['from=2026-09-20', [overtimeId, octoberId]],
+      ['to=2026-09-17', [workLogId, sameDayId]],
+      ['from=2026-09-18&to=2026-09-30', [overtimeId]],
+      ['isOvertime=true', [overtimeId]],
+      [`contractId=${contract.id}&from=2026-09-18&to=2026-09-30&isOvertime=true`, [overtimeId]],
+    ]) {
+      response = await request('GET', `/api/worklogs?${query}`, undefined, session.token);
+      assert.equal(response.status, 200);
+      assert.deepEqual(response.body.workLogs.map((workLog) => workLog.id).sort(), expectedIds.sort());
+    }
+
+    const otherWorkLog = await request('POST', '/api/worklogs', {
+      contractId: otherContract.id, workDate: '2026-09-17', hours: '1', note: null,
+    }, otherSession.token);
+    assert.equal(otherWorkLog.status, 201);
+    for (const method of ['GET', 'PATCH', 'DELETE']) {
+      const body = method === 'PATCH' ? { hours: '2' } : undefined;
+      assert.equal((await request(method, `/api/worklogs/${otherWorkLog.body.workLog.id}`, body, session.token)).status, 404);
+    }
+    assert.equal((await request('POST', '/api/worklogs', { ...payload, contractId: otherContract.id }, session.token)).status, 404);
+    assert.equal((await request('GET', `/api/worklogs?contractId=${otherContract.id}`, undefined, session.token)).status, 404);
+    assert.equal((await request('POST', '/api/worklogs', { ...payload, contractId: inactiveContract.id }, session.token)).status, 409);
+    assert.equal((await request('PATCH', `/api/worklogs/${workLogId}`, { contractId: inactiveContract.id }, session.token)).status, 409);
+
+    await store.updateContract(owner.id, contract.id, { active: false });
+    response = await request('PATCH', `/api/worklogs/${workLogId}`, { note: 'Contract archived but correction allowed' }, session.token);
+    assert.equal(response.status, 200);
+    assert.equal(response.body.workLog.note, 'Contract archived but correction allowed');
+
+    for (const method of ['GET', 'PATCH', 'DELETE']) {
+      const body = method === 'PATCH' ? { hours: '1' } : undefined;
+      assert.equal((await request(method, '/api/worklogs/not-a-uuid', body, session.token)).status, 400);
+    }
+    for (const hours of ['0', '-1']) {
+      assert.equal((await request('POST', '/api/worklogs', { ...payload, hours, contractId: inactiveContract.id }, session.token)).status, 400);
+    }
+    assert.equal((await request('POST', '/api/worklogs', { ...payload, workDate: '2026-02-30' }, session.token)).status, 400);
+    assert.equal((await request('GET', '/api/worklogs?from=2026-10-01&to=2026-09-01', undefined, session.token)).status, 400);
+    assert.equal((await request('GET', '/api/worklogs?isOvertime=yes', undefined, session.token)).status, 400);
+    assert.equal((await request('GET', '/api/worklogs?unknown=true', undefined, session.token)).status, 400);
+    assert.equal((await request('POST', '/api/worklogs', { ...payload, userId: owner.id }, session.token)).status, 400);
+    assert.equal((await request('PATCH', `/api/worklogs/${workLogId}`, {}, session.token)).status, 400);
+    assert.equal((await request('PATCH', `/api/worklogs/${workLogId}`, { note: 'x'.repeat(2001) }, session.token)).status, 400);
+
+    response = await request('DELETE', `/api/worklogs/${workLogId}`, undefined, session.token);
+    assert.equal(response.status, 200);
+    assert.equal(response.body.workLog.active, false);
+    assert.notEqual(response.body.workLog.deletedAt, null);
+    const deletedAt = response.body.workLog.deletedAt;
+    response = await request('DELETE', `/api/worklogs/${workLogId}`, undefined, session.token);
+    assert.equal(response.status, 200);
+    assert.equal(response.body.workLog.deletedAt, deletedAt);
+    assert.equal((await request('GET', `/api/worklogs/${workLogId}`, undefined, session.token)).status, 200);
+    response = await request('GET', '/api/worklogs', undefined, session.token);
+    assert.equal(response.body.workLogs.some((workLog) => workLog.id === workLogId), false);
+    response = await request('GET', '/api/worklogs?includeInactive=true', undefined, session.token);
+    assert.equal(response.body.workLogs.some((workLog) => workLog.id === workLogId && !workLog.active), true);
+    response = await request('PATCH', `/api/worklogs/${workLogId}`, { active: true }, session.token);
+    assert.equal(response.status, 200);
+    assert.equal(response.body.workLog.active, true);
+    assert.equal(response.body.workLog.deletedAt, null);
+  });
+
   await t.test('pending login using old password fails after password change', async (st) => {
     const user = await fixture('race');
     const existing = await login(user);

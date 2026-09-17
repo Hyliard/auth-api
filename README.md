@@ -142,6 +142,11 @@ auth-api/
 | GET | /api/contracts/:contractId | Si | Obtener contrato |
 | PATCH | /api/contracts/:contractId | Si | Editar o reactivar contrato |
 | DELETE | /api/contracts/:contractId | Si | Archivar contrato |
+| POST | /api/worklogs | Si | Crear registro de trabajo |
+| GET | /api/worklogs | Si | Listar y filtrar registros activos |
+| GET | /api/worklogs/:workLogId | Si | Obtener registro, incluso archivado |
+| PATCH | /api/worklogs/:workLogId | Si | Editar o reactivar registro |
+| DELETE | /api/worklogs/:workLogId | Si | Archivar registro de trabajo |
 
 ### Contracts
 
@@ -156,6 +161,34 @@ strings para conservar precision. `currency` usa tres letras y se normaliza a
 mayusculas. Las fechas opcionales usan `YYYY-MM-DD`, y `endDate` no puede ser
 anterior a `startDate`. Las respuestas incluyen `client.id`, `client.name` y
 `client.company`, pero no exponen `userId` ni incluyen WorkLogs.
+
+### WorkLogs
+
+Los registros de trabajo pertenecen al usuario autenticado y solo pueden crearse
+o reasignarse a Contracts propios activos. Archivar posteriormente un Contract no
+oculta ni impide corregir sus WorkLogs existentes. `DELETE /api/worklogs/:workLogId`
+es un soft delete idempotente: establece `active=false` y `deletedAt`; reactivar
+con `PATCH { "active": true }` limpia `deletedAt`. El listado normal muestra solo
+registros activos, mientras `includeInactive=true` incluye los archivados. GET por
+ID devuelve también un registro archivado propio.
+
+`GET /api/worklogs` admite filtros combinables: `contractId`, `from`, `to` e
+`isOvertime`, además de `includeInactive`. Las fechas usan `YYYY-MM-DD`, los rangos
+son inclusivos y `hours` se envia preferentemente y se devuelve como string decimal.
+Las respuestas incluyen datos basicos del Contract y su Client, sin exponer
+`userId`.
+
+Ejemplo de creacion:
+
+```json
+{
+  "contractId": "8c652b15-ed56-4adc-8228-8784ce708d03",
+  "workDate": "2026-09-17",
+  "hours": "8.00",
+  "isOvertime": false,
+  "note": "Implementacion de endpoints"
+}
+```
 
 ## Ejemplos con curl
 
