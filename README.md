@@ -132,6 +132,8 @@ auth-api/
 | GET | /api/devices | Si | Listar dispositivos vinculados |
 | DELETE | /api/devices/:deviceId | Si | Desvincular dispositivo |
 | DELETE | /api/users/me | Si | Eliminar cuenta |
+| POST | /api/users/me/avatar | Si | Subir o reemplazar avatar |
+| GET | /api/users/me/avatar | Si | Descargar avatar propio |
 | POST | /api/clients | Si | Crear cliente |
 | GET | /api/clients | Si | Listar clientes activos |
 | GET | /api/clients/:clientId | Si | Obtener cliente |
@@ -147,6 +149,23 @@ auth-api/
 | GET | /api/worklogs/:workLogId | Si | Obtener registro, incluso archivado |
 | PATCH | /api/worklogs/:workLogId | Si | Editar o reactivar registro |
 | DELETE | /api/worklogs/:workLogId | Si | Archivar registro de trabajo |
+
+### Avatar de perfil
+
+`POST /api/users/me/avatar` recibe `multipart/form-data` con exactamente un archivo
+en el campo `avatar`. El limite es 5 MB y se aceptan JPEG, PNG y WebP despues de
+validar tanto el MIME declarado como la firma binaria real. El nombre original se
+ignora y el servidor genera un UUID con extension canonica.
+
+`GET /api/users/me/avatar` requiere el mismo Bearer token y descarga solamente el
+avatar del usuario autenticado. No se publica el directorio de uploads. Register,
+login y `GET /api/auth/me` incluyen aditivamente `avatarUrl`, que vale `null` si no
+hay avatar o `/api/users/me/avatar?v=<version>` si existe. Nunca se devuelven el
+filename almacenado ni rutas internas.
+
+Localmente los archivos se guardan en `uploads/avatars` salvo que se configure una
+ruta absoluta mediante `AVATAR_STORAGE_DIR`. La base solo conserva el filename
+generado; el contenido binario no se almacena en PostgreSQL.
 
 ### Contracts
 
@@ -347,6 +366,10 @@ El deployment de Raspberry Pi vive en `/home/hyliard/docker/authdemo` y usa
 contenedor `authdemo-api`. PostgreSQL corre en `authdemo-db`, se publica solo en
 `127.0.0.1:5433` y conserva sus datos en el volumen existente
 `authdemo_authdemo_pgdata`.
+
+Los avatares se almacenan separadamente en el volumen persistente
+`authdemo_authdemo_avatars`, montado en `/app/uploads/avatars`. Recrear o reconstruir
+`authdemo-api` no elimina las imagenes y no modifica el volumen PostgreSQL.
 
 La Raspberry necesita dos archivos locales que nunca deben entrar en Git:
 

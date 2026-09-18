@@ -2,6 +2,9 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const { once } = require('node:events');
 const { randomUUID } = require('node:crypto');
+const { mkdtempSync, readdirSync, rmSync } = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const bcrypt = require('bcryptjs');
 
 // Explicit opt-in; never use the developer DATABASE_URL or load their .env.
@@ -12,11 +15,13 @@ if (!testUrl || new URL(testUrl).pathname !== '/auth_api_phase1_test') {
 process.env.DATABASE_URL = testUrl;
 process.env.JWT_SECRET = 'integration-test-only-credential-0123456789abcdef';
 process.env.JWT_EXPIRES_IN = '1h';
+const avatarStorageDir = mkdtempSync(path.join(os.tmpdir(), 'auth-api-avatar-test-'));
+process.env.AVATAR_STORAGE_DIR = avatarStorageDir;
 const prisma = require('../src/store/prisma');
 const store = require('../src/store/db.store');
 const app = require('../src/app');
 const { signToken } = require('../src/utils/jwt');
-const { registerLimiter, loginLimiter, sensitiveLimiter } = require('../src/middleware/rate-limit.middleware');
+const { registerLimiter, loginLimiter, sensitiveLimiter, avatarUploadLimiter } = require('../src/middleware/rate-limit.middleware');
 const deferred = () => {
   let resolve;
   const promise = new Promise((done) => { resolve = done; });
@@ -37,6 +42,7 @@ test('Phase 1 against isolated PostgreSQL', { timeout: 60000 }, async (t) => {
     await new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); });
     await prisma.user.deleteMany({ where: { email: { endsWith: suffix } } });
     await prisma.$disconnect();
+    rmSync(avatarStorageDir, { recursive: true, force: true });
   });
   async function request(method, route, body, token) {
     const response = await fetch(base + route, {
@@ -54,6 +60,19 @@ test('Phase 1 against isolated PostgreSQL', { timeout: 60000 }, async (t) => {
     assert.equal(response.body.user.passwordHash, undefined);
     return response.body;
   }
+  async function avatarRequest(token, files = [], fields = []) {
+    const form = new FormData();
+    for (const [key, value] of fields) form.append(key, value);
+    for (const file of files) {
+      form.append(file.field || 'avatar', new Blob([file.buffer], { type: file.type }), file.name);
+    }
+    const response = await fetch(`${base}/api/users/me/avatar`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: form,
+    });
+    return { status: response.status, body: await response.json() };
+  }
 
   await t.test('register and normal duplicate', async () => {
     registerLimiter.resetKey('127.0.0.1');
@@ -62,6 +81,7 @@ test('Phase 1 against isolated PostgreSQL', { timeout: 60000 }, async (t) => {
     assert.equal(created.status, 201);
     assert.deepEqual(Object.keys(created.body), ['user']);
     assert.equal(created.body.user.passwordHash, undefined);
+    assert.equal(created.body.user.avatarUrl, null);
     assert.equal((await request('POST', '/api/auth/register', body)).status, 409);
   });
 
@@ -348,6 +368,88 @@ test('Phase 1 against isolated PostgreSQL', { timeout: 60000 }, async (t) => {
     assert.equal(response.status, 200);
     assert.equal(response.body.workLog.active, true);
     assert.equal(response.body.workLog.deletedAt, null);
+  });
+
+  await t.test('avatar upload, validation, replacement, isolation, download and account cleanup', async (st) => {
+    const jpeg = Buffer.from('/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAX/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAEf/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABBQJ//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAwEBPwF//8QAFBEBAAAAAAAAAAAAAAAAAAAAAP/aAAgBAgEBPwF//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQAGPwJ//8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQABPyF//9oADAMBAAIAAwAAABD/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAEDAQE/EB//xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECAQE/EB//xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAE/EB//2Q==', 'base64');
+    const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+    const webp = Buffer.from('UklGRiIAAABXRUJQVlA4IBYAAAAwAQCdASoBAAEADsD+JaQAA3AAAAAA', 'base64');
+    const owner = await fixture('avatar-owner');
+    const other = await fixture('avatar-other');
+    const session = await login(owner);
+    const otherSession = await login(other);
+    avatarUploadLimiter.resetKey(owner.id);
+    avatarUploadLimiter.resetKey(other.id);
+
+    let response = await request('GET', '/api/auth/me', undefined, session.token);
+    assert.equal(response.status, 200);
+    assert.equal(response.body.user.avatarUrl, null);
+    assert.equal((await request('GET', '/api/users/me/avatar', undefined, session.token)).status, 404);
+    assert.equal((await avatarRequest(undefined, [{ buffer: png, type: 'image/png', name: 'valid.png' }])).status, 401);
+    assert.equal((await avatarRequest('invalid-token', [{ buffer: png, type: 'image/png', name: 'valid.png' }])).status, 401);
+    assert.equal((await avatarRequest(session.token)).status, 400);
+    assert.equal((await avatarRequest(session.token, [{ field: 'photo', buffer: png, type: 'image/png', name: 'valid.png' }])).status, 400);
+    assert.equal((await avatarRequest(session.token, [
+      { buffer: png, type: 'image/png', name: 'one.png' },
+      { buffer: png, type: 'image/png', name: 'two.png' },
+    ])).status, 400);
+    assert.equal((await avatarRequest(session.token, [{ buffer: Buffer.alloc(5 * 1024 * 1024 + 1), type: 'image/png', name: 'large.png' }])).status, 413);
+    assert.equal((await avatarRequest(session.token, [{ buffer: png, type: 'image/jpeg', name: 'fake.jpg' }])).status, 415);
+    assert.equal((await avatarRequest(session.token, [{ buffer: Buffer.from('not an image'), type: 'image/png', name: 'fake.png' }])).status, 400);
+    assert.equal((await avatarRequest(session.token, [{ buffer: Buffer.from('GIF89a'), type: 'image/gif', name: 'image.gif' }])).status, 415);
+    assert.equal((await avatarRequest(session.token, [{ buffer: Buffer.alloc(0), type: 'image/png', name: 'empty.png' }])).status, 400);
+
+    response = await avatarRequest(session.token, [{ buffer: jpeg, type: 'image/jpeg', name: '../../original-name.jpg' }]);
+    assert.equal(response.status, 200);
+    assert.match(response.body.user.avatarUrl, /^\/api\/users\/me\/avatar\?v=[0-9a-f]{16}$/);
+    assert.equal(response.body.user.avatarFilename, undefined);
+    assert.equal(JSON.stringify(response.body).includes(avatarStorageDir), false);
+    let storedUser = await store.findUserById(owner.id);
+    assert.match(storedUser.avatarFilename, /^[0-9a-f-]+\.jpg$/);
+    assert.equal(storedUser.avatarFilename.includes('original-name'), false);
+    const jpegFilename = storedUser.avatarFilename;
+    assert.deepEqual(readdirSync(avatarStorageDir), [jpegFilename]);
+
+    let download = await fetch(`${base}/api/users/me/avatar`, { headers: { Authorization: `Bearer ${session.token}` } });
+    assert.equal(download.status, 200);
+    assert.match(download.headers.get('content-type'), /^image\/jpeg/);
+    assert.deepEqual(Buffer.from(await download.arrayBuffer()), jpeg);
+    assert.equal((await request('GET', '/api/users/me/avatar', undefined, otherSession.token)).status, 404);
+
+    response = await avatarRequest(session.token, [{ buffer: png, type: 'image/png', name: 'replacement.png' }]);
+    assert.equal(response.status, 200);
+    storedUser = await store.findUserById(owner.id);
+    assert.match(storedUser.avatarFilename, /^[0-9a-f-]+\.png$/);
+    assert.notEqual(storedUser.avatarFilename, jpegFilename);
+    assert.deepEqual(readdirSync(avatarStorageDir), [storedUser.avatarFilename]);
+
+    response = await avatarRequest(session.token, [{ buffer: webp, type: 'image/webp', name: 'avatar.webp' }]);
+    assert.equal(response.status, 200);
+    storedUser = await store.findUserById(owner.id);
+    assert.match(storedUser.avatarFilename, /^[0-9a-f-]+\.webp$/);
+    assert.deepEqual(readdirSync(avatarStorageDir), [storedUser.avatarFilename]);
+    response = await request('GET', '/api/auth/me', undefined, session.token);
+    assert.equal(response.status, 200);
+    assert.equal(response.body.user.avatarUrl.includes(storedUser.avatarFilename), false);
+
+    response = await avatarRequest(otherSession.token, [{ buffer: png, type: 'image/png', name: 'other.png' }]);
+    assert.equal(response.status, 200);
+    assert.equal((await store.findUserById(owner.id)).avatarFilename, storedUser.avatarFilename);
+    assert.notEqual((await store.findUserById(other.id)).avatarFilename, storedUser.avatarFilename);
+
+    const filesBeforeFailure = readdirSync(avatarStorageDir).sort();
+    const replacementMock = st.mock.method(store, 'replaceUserAvatar', async () => {
+      throw new Error('Synthetic avatar database failure');
+    });
+    response = await avatarRequest(session.token, [{ buffer: png, type: 'image/png', name: 'rollback.png' }]);
+    assert.equal(response.status, 500);
+    assert.deepEqual(readdirSync(avatarStorageDir).sort(), filesBeforeFailure);
+    replacementMock.mock.restore();
+
+    sensitiveLimiter.resetKey(owner.id);
+    response = await request('DELETE', '/api/users/me', { password: oldPassword }, session.token);
+    assert.equal(response.status, 200);
+    assert.equal(readdirSync(avatarStorageDir).includes(storedUser.avatarFilename), false);
   });
 
   await t.test('pending login using old password fails after password change', async (st) => {

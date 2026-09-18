@@ -1,5 +1,10 @@
 const prisma = require('./prisma');
+const { createHash } = require('node:crypto');
 const { AppError } = require('../utils/errors');
+
+function avatarVersion(filename) {
+  return createHash('sha256').update(filename).digest('hex').slice(0, 16);
+}
 
 function toPublicUser(user) {
   return {
@@ -7,6 +12,9 @@ function toPublicUser(user) {
     name: user.name,
     email: user.email,
     createdAt: user.createdAt,
+    avatarUrl: user.avatarFilename
+      ? `/api/users/me/avatar?v=${avatarVersion(user.avatarFilename)}`
+      : null,
   };
 }
 
@@ -89,6 +97,17 @@ function deleteDevice(deviceId) {
 
 function deleteUser(id) {
   return prisma.user.delete({ where: { id } });
+}
+
+function replaceUserAvatar(userId, avatarFilename) {
+  return prisma.$transaction(async (tx) => {
+    const users = await tx.$queryRaw`
+      SELECT "avatarFilename" FROM "User" WHERE "id" = ${userId}::uuid FOR UPDATE
+    `;
+    if (users.length !== 1) return null;
+    const user = await tx.user.update({ where: { id: userId }, data: { avatarFilename } });
+    return { user, previousAvatarFilename: users[0].avatarFilename };
+  }, { isolationLevel: 'ReadCommitted' });
 }
 
 function createClient({ userId, name, email, company }) {
@@ -240,6 +259,7 @@ module.exports = {
   revokeSessionsByDevice,
   deleteDevice,
   deleteUser,
+  replaceUserAvatar,
   createClient,
   getClientsByUser,
   findClientById,

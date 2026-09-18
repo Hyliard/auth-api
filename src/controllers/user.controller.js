@@ -2,6 +2,7 @@ const bcrypt = require('bcryptjs');
 const { AppError } = require('../utils/errors');
 const store = require('../store/db.store');
 const { validateBody, validatePassword } = require('../utils/validators');
+const { deleteAvatarBestEffort } = require('../services/avatar-storage.service');
 
 async function deleteAccount(req, res, next) {
   try {
@@ -19,7 +20,8 @@ async function deleteAccount(req, res, next) {
     }
 
     await store.revokeSessionsByUser(user.id);
-    await store.deleteUser(user.id);
+    const deletedUser = await store.deleteUser(user.id);
+    await deleteAvatarBestEffort(deletedUser.avatarFilename);
 
     res.status(200).json({ message: 'Cuenta eliminada correctamente' });
   } catch (err) {

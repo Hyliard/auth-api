@@ -17,5 +17,6 @@ function createLimiter(limit, keyGenerator) {
 const registerLimiter = createLimiter(10);
 const loginLimiter = createLimiter(30);
 const sensitiveLimiter = createLimiter(10, (req) => req.auth.userId);
+const avatarUploadLimiter = createLimiter(20, (req) => req.auth.userId);
 
-module.exports = { registerLimiter, loginLimiter, sensitiveLimiter };
+module.exports = { registerLimiter, loginLimiter, sensitiveLimiter, avatarUploadLimiter };

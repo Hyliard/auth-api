@@ -27,6 +27,7 @@ test('configuration validates fields without exposing their values', () => {
     DATABASE_URL: [undefined, '', 'not-a-url', 'https://host/database', 'postgresql://host/'],
     PORT: ['', '0', '-1', '65536', '3.14', 'abc', '3000junk'],
     JWT_EXPIRES_IN: ['', '0s', '-1h', '120', 'bad', '1ms', '999999999999999999999y'],
+    AVATAR_STORAGE_DIR: ['relative/path'],
   })) {
     for (const value of values) assert.throws(() => validateConfig({ ...validConfig, [key]: value }), new RegExp(key));
   }

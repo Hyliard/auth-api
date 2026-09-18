@@ -27,9 +27,14 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@authdemo-db:5432/${POSTGRES_DB}?schema=public
       JWT_SECRET: ${JWT_SECRET:?}
       JWT_EXPIRES_IN: 7d
+      AVATAR_STORAGE_DIR: /app/uploads/avatars
     ports:
       - "3004:3000"
+    volumes:
+      - authdemo_avatars:/app/uploads/avatars
 
 volumes:
   authdemo_pgdata:
     name: authdemo_authdemo_pgdata
+  authdemo_avatars:
+    name: authdemo_authdemo_avatars

@@ -106,6 +106,32 @@
       }
     },
     {
+      "name": "Avatar",
+      "description": "Selecciona localmente un archivo JPEG, PNG o WebP de hasta 5 MB para el campo avatar.",
+      "item": [
+        {
+          "name": "Upload or replace avatar",
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "body": {
+              "mode": "formdata",
+              "formdata": [{ "key": "avatar", "type": "file", "src": [] }]
+            },
+            "url": { "raw": "{{baseUrl}}/api/users/me/avatar", "host": ["{{baseUrl}}"], "path": ["api", "users", "me", "avatar"] }
+          }
+        },
+        {
+          "name": "Download current avatar",
+          "request": {
+            "method": "GET",
+            "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }],
+            "url": { "raw": "{{baseUrl}}/api/users/me/avatar", "host": ["{{baseUrl}}"], "path": ["api", "users", "me", "avatar"] }
+          }
+        }
+      ]
+    },
+    {
       "name": "List Devices",
       "request": {
         "method": "GET",

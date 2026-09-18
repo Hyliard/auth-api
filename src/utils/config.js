@@ -1,4 +1,5 @@
 const jwt = require('jsonwebtoken');
+const path = require('node:path');
 
 function validateConfig(env = process.env) {
   const invalid = (field) => { throw new Error(`Configuracion invalida: ${field}`); };
@@ -25,6 +26,12 @@ function validateConfig(env = process.env) {
     const payload = jwt.decode(jwt.sign({}, secret, { expiresIn }));
     if (!Number.isSafeInteger(payload.exp) || payload.exp <= payload.iat) invalid('JWT_EXPIRES_IN');
   } catch { invalid('JWT_EXPIRES_IN'); }
+
+  if (env.AVATAR_STORAGE_DIR !== undefined && env.AVATAR_STORAGE_DIR !== '') {
+    if (typeof env.AVATAR_STORAGE_DIR !== 'string' || !path.isAbsolute(env.AVATAR_STORAGE_DIR)) {
+      invalid('AVATAR_STORAGE_DIR');
+    }
+  }
   return { port: Number(port) };
 }
 
