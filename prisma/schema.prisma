@@ -19,6 +19,8 @@ model User {
   clients        Client[]
   contracts      Contract[]
   workLogs       WorkLog[]
+  invoices       Invoice[]
+  payments       Payment[]
 }
 
 model Device {
@@ -58,6 +60,8 @@ model Client {
   updatedAt DateTime   @updatedAt
   user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
   contracts Contract[]
+  invoices  Invoice[]
+  payments  Payment[]
 
   @@index([userId])
 }
@@ -78,6 +82,7 @@ model Contract {
   user         User      @relation(fields: [userId], references: [id], onDelete: Cascade)
   client       Client    @relation(fields: [clientId], references: [id], onDelete: Restrict)
   workLogs     WorkLog[]
+  invoices     Invoice[]
 
   @@index([userId])
   @@index([clientId])
@@ -85,22 +90,98 @@ model Contract {
 }
 
 model WorkLog {
-  id         String    @id @default(uuid()) @db.Uuid
-  userId     String    @db.Uuid
-  contractId String    @db.Uuid
-  workDate   DateTime  @db.Date
-  hours      Decimal
-  isOvertime Boolean   @default(false)
-  note       String?
-  active     Boolean   @default(true)
-  deletedAt  DateTime?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
-  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  contract   Contract  @relation(fields: [contractId], references: [id], onDelete: Restrict)
+  id          String          @id @default(uuid()) @db.Uuid
+  userId      String          @db.Uuid
+  contractId  String          @db.Uuid
+  workDate    DateTime        @db.Date
+  hours       Decimal
+  isOvertime  Boolean         @default(false)
+  note        String?
+  active      Boolean         @default(true)
+  deletedAt   DateTime?
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+  user        User            @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contract    Contract        @relation(fields: [contractId], references: [id], onDelete: Restrict)
+  invoiceLink InvoiceWorkLog?
 
   @@index([userId])
   @@index([contractId])
   @@index([userId, contractId])
   @@index([userId, workDate])
+}
+
+enum InvoiceStatus {
+  DRAFT
+  PENDING
+  PAID
+  CANCELLED
+}
+
+model Invoice {
+  id         String           @id @default(uuid()) @db.Uuid
+  userId     String           @db.Uuid
+  clientId   String           @db.Uuid
+  contractId String?          @db.Uuid
+  number     String?
+  periodFrom DateTime?        @db.Date
+  periodTo   DateTime?        @db.Date
+  currency   String
+  subtotal   Decimal
+  status     InvoiceStatus    @default(PENDING)
+  issuedAt   DateTime?        @db.Date
+  dueDate    DateTime?        @db.Date
+  note       String?
+  active     Boolean          @default(true)
+  deletedAt  DateTime?
+  createdAt  DateTime         @default(now())
+  updatedAt  DateTime         @updatedAt
+  user       User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  client     Client           @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  contract   Contract?        @relation(fields: [contractId], references: [id], onDelete: Restrict)
+  workLogs   InvoiceWorkLog[]
+  payments   Payment[]
+
+  @@index([userId])
+  @@index([clientId])
+  @@index([contractId])
+  @@index([userId, clientId])
+  @@index([userId, status])
+  @@index([userId, dueDate])
+}
+
+model InvoiceWorkLog {
+  invoiceId String   @db.Uuid
+  workLogId String   @unique @db.Uuid
+  createdAt DateTime @default(now())
+  invoice   Invoice  @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  workLog   WorkLog  @relation(fields: [workLogId], references: [id], onDelete: Restrict)
+
+  @@id([invoiceId, workLogId])
+  @@index([invoiceId])
+  @@index([workLogId])
+}
+
+model Payment {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  invoiceId String    @db.Uuid
+  clientId  String    @db.Uuid
+  amount    Decimal
+  currency  String
+  paidAt    DateTime  @db.Date
+  method    String?
+  note      String?
+  active    Boolean   @default(true)
+  deletedAt DateTime?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  invoice   Invoice   @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+  client    Client    @relation(fields: [clientId], references: [id], onDelete: Restrict)
+
+  @@index([userId])
+  @@index([invoiceId])
+  @@index([clientId])
+  @@index([userId, paidAt])
 }

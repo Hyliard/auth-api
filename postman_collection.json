@@ -11,6 +11,8 @@
     { "key": "clientId", "value": "", "type": "string" },
     { "key": "contractId", "value": "", "type": "string" },
     { "key": "workLogId", "value": "", "type": "string" },
+    { "key": "invoiceId", "value": "", "type": "string" },
+    { "key": "paymentId", "value": "", "type": "string" },
     { "key": "otherDeviceId", "value": "", "type": "string" },
     { "key": "otherToken", "value": "", "type": "string" }
   ],
@@ -354,6 +356,65 @@
             "url": { "raw": "{{baseUrl}}/api/worklogs/{{workLogId}}", "host": ["{{baseUrl}}"], "path": ["api", "worklogs", "{{workLogId}}"] }
           }
         }
+      ]
+    },
+    {
+      "name": "Invoices",
+      "description": "Invoices propias, WorkLogs facturados una sola vez, saldos derivados y soft delete.",
+      "item": [
+        {
+          "name": "Create Invoice",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.response.to.have.status(201);",
+            "const data = pm.response.json();",
+            "pm.environment.set(\"invoiceId\", data.invoice.id);"
+          ] } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }],
+            "body": { "mode": "raw", "raw": "{\n  \"clientId\": \"{{clientId}}\",\n  \"contractId\": \"{{contractId}}\",\n  \"periodFrom\": \"2026-09-01\",\n  \"periodTo\": \"2026-09-30\",\n  \"currency\": \"USD\",\n  \"subtotal\": \"1200.00\",\n  \"issuedAt\": \"2026-09-30\",\n  \"dueDate\": \"2026-10-10\",\n  \"note\": \"September work\",\n  \"workLogIds\": [\"{{workLogId}}\"]\n}" },
+            "url": { "raw": "{{baseUrl}}/api/invoices", "host": ["{{baseUrl}}"], "path": ["api", "invoices"] }
+          }
+        },
+        { "name": "List Invoices", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{baseUrl}}/api/invoices", "host": ["{{baseUrl}}"], "path": ["api", "invoices"] } } },
+        { "name": "Get Invoice by ID", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{baseUrl}}/api/invoices/{{invoiceId}}", "host": ["{{baseUrl}}"], "path": ["api", "invoices", "{{invoiceId}}"] } } },
+        { "name": "Update Invoice", "request": { "method": "PATCH", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }], "body": { "mode": "raw", "raw": "{\n  \"note\": \"Updated invoice\",\n  \"dueDate\": \"2026-10-15\"\n}" }, "url": { "raw": "{{baseUrl}}/api/invoices/{{invoiceId}}", "host": ["{{baseUrl}}"], "path": ["api", "invoices", "{{invoiceId}}"] } } },
+        { "name": "Archive Invoice", "request": { "method": "DELETE", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{baseUrl}}/api/invoices/{{invoiceId}}", "host": ["{{baseUrl}}"], "path": ["api", "invoices", "{{invoiceId}}"] } } },
+        { "name": "Include Inactive Invoices", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{baseUrl}}/api/invoices?includeInactive=true", "host": ["{{baseUrl}}"], "path": ["api", "invoices"], "query": [{ "key": "includeInactive", "value": "true" }] } } },
+        { "name": "Filter Invoices by Client", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{baseUrl}}/api/invoices?clientId={{clientId}}", "host": ["{{baseUrl}}"], "path": ["api", "invoices"], "query": [{ "key": "clientId", "value": "{{clientId}}" }] } } },
+        { "name": "Filter Invoices by Contract", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{baseUrl}}/api/invoices?contractId={{contractId}}", "host": ["{{baseUrl}}"], "path": ["api", "invoices"], "query": [{ "key": "contractId", "value": "{{contractId}}" }] } } },
+        { "name": "Filter Invoices by Status", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{baseUrl}}/api/invoices?status=PENDING", "host": ["{{baseUrl}}"], "path": ["api", "invoices"], "query": [{ "key": "status", "value": "PENDING" }] } } },
+        { "name": "Filter Invoices by Date Range", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{baseUrl}}/api/invoices?from=2026-09-01&to=2026-09-30", "host": ["{{baseUrl}}"], "path": ["api", "invoices"], "query": [{ "key": "from", "value": "2026-09-01" }, { "key": "to", "value": "2026-09-30" }] } } },
+        { "name": "Reactivate Invoice", "request": { "method": "PATCH", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }], "body": { "mode": "raw", "raw": "{\n  \"active\": true\n}" }, "url": { "raw": "{{baseUrl}}/api/invoices/{{invoiceId}}", "host": ["{{baseUrl}}"], "path": ["api", "invoices", "{{invoiceId}}"] } } }
+      ]
+    },
+    {
+      "name": "Payments",
+      "description": "Pagos parciales ligados a Invoice, sin sobrepago y con soft delete.",
+      "item": [
+        {
+          "name": "Create Payment",
+          "event": [{ "listen": "test", "script": { "type": "text/javascript", "exec": [
+            "pm.response.to.have.status(201);",
+            "const data = pm.response.json();",
+            "pm.environment.set(\"paymentId\", data.payment.id);"
+          ] } }],
+          "request": {
+            "method": "POST",
+            "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }],
+            "body": { "mode": "raw", "raw": "{\n  \"invoiceId\": \"{{invoiceId}}\",\n  \"amount\": \"400.00\",\n  \"currency\": \"USD\",\n  \"paidAt\": \"2026-10-05\",\n  \"method\": \"Bank Transfer\",\n  \"note\": \"First partial payment\"\n}" },
+            "url": { "raw": "{{baseUrl}}/api/payments", "host": ["{{baseUrl}}"], "path": ["api", "payments"] }
+          }
+        },
+        { "name": "List Payments", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{baseUrl}}/api/payments", "host": ["{{baseUrl}}"], "path": ["api", "payments"] } } },
+        { "name": "Get Payment by ID", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{baseUrl}}/api/payments/{{paymentId}}", "host": ["{{baseUrl}}"], "path": ["api", "payments", "{{paymentId}}"] } } },
+        { "name": "Update Payment", "request": { "method": "PATCH", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }], "body": { "mode": "raw", "raw": "{\n  \"amount\": \"350.00\",\n  \"note\": \"Adjusted payment\"\n}" }, "url": { "raw": "{{baseUrl}}/api/payments/{{paymentId}}", "host": ["{{baseUrl}}"], "path": ["api", "payments", "{{paymentId}}"] } } },
+        { "name": "Archive Payment", "request": { "method": "DELETE", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{baseUrl}}/api/payments/{{paymentId}}", "host": ["{{baseUrl}}"], "path": ["api", "payments", "{{paymentId}}"] } } },
+        { "name": "Include Inactive Payments", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{baseUrl}}/api/payments?includeInactive=true", "host": ["{{baseUrl}}"], "path": ["api", "payments"], "query": [{ "key": "includeInactive", "value": "true" }] } } },
+        { "name": "Filter Payments by Invoice", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{baseUrl}}/api/payments?invoiceId={{invoiceId}}", "host": ["{{baseUrl}}"], "path": ["api", "payments"], "query": [{ "key": "invoiceId", "value": "{{invoiceId}}" }] } } },
+        { "name": "Filter Payments by Client", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{baseUrl}}/api/payments?clientId={{clientId}}", "host": ["{{baseUrl}}"], "path": ["api", "payments"], "query": [{ "key": "clientId", "value": "{{clientId}}" }] } } },
+        { "name": "Filter Payments by Date Range", "request": { "method": "GET", "header": [{ "key": "Authorization", "value": "Bearer {{token}}" }], "url": { "raw": "{{baseUrl}}/api/payments?from=2026-10-01&to=2026-10-31", "host": ["{{baseUrl}}"], "path": ["api", "payments"], "query": [{ "key": "from", "value": "2026-10-01" }, { "key": "to", "value": "2026-10-31" }] } } },
+        { "name": "Reactivate Payment", "request": { "method": "PATCH", "header": [{ "key": "Content-Type", "value": "application/json" }, { "key": "Authorization", "value": "Bearer {{token}}" }], "body": { "mode": "raw", "raw": "{\n  \"active\": true\n}" }, "url": { "raw": "{{baseUrl}}/api/payments/{{paymentId}}", "host": ["{{baseUrl}}"], "path": ["api", "payments", "{{paymentId}}"] } } }
       ]
     },
     {

@@ -1,4 +1,5 @@
 const prisma = require('./prisma');
+const { Prisma } = require('@prisma/client');
 const { createHash } = require('node:crypto');
 const { AppError } = require('../utils/errors');
 
@@ -96,7 +97,12 @@ function deleteDevice(deviceId) {
 }
 
 function deleteUser(id) {
-  return prisma.user.delete({ where: { id } });
+  return prisma.$transaction(async (tx) => {
+    await tx.invoiceWorkLog.deleteMany({
+      where: { OR: [{ invoice: { userId: id } }, { workLog: { userId: id } }] },
+    });
+    return tx.user.delete({ where: { id } });
+  });
 }
 
 function replaceUserAvatar(userId, avatarFilename) {
@@ -244,6 +250,252 @@ async function updateWorkLog(userId, workLogId, data) {
   return findWorkLogById(userId, workLogId);
 }
 
+const invoiceInclude = {
+  client: { select: contractClientSelect },
+  contract: { select: { id: true, name: true } },
+  workLogs: {
+    include: {
+      workLog: {
+        select: {
+          id: true, contractId: true, workDate: true, hours: true,
+          isOvertime: true, note: true, active: true,
+        },
+      },
+    },
+    orderBy: { createdAt: 'asc' },
+  },
+  payments: { where: { active: true }, orderBy: [{ paidAt: 'asc' }, { createdAt: 'asc' }] },
+};
+
+const paymentInclude = {
+  client: { select: contractClientSelect },
+  invoice: { select: { id: true, number: true, subtotal: true, currency: true, status: true } },
+};
+
+function findInvoiceByIdWith(client, userId, invoiceId) {
+  return client.invoice.findFirst({ where: { id: invoiceId, userId }, include: invoiceInclude });
+}
+
+function findPaymentByIdWith(client, userId, paymentId) {
+  return client.payment.findFirst({ where: { id: paymentId, userId }, include: paymentInclude });
+}
+
+function findInvoiceWorkLogs(userId, workLogIds) {
+  if (!workLogIds.length) return Promise.resolve([]);
+  return prisma.workLog.findMany({
+    where: { userId, id: { in: workLogIds } },
+    include: {
+      contract: { select: { id: true, clientId: true, currency: true, active: true } },
+      invoiceLink: { select: { invoiceId: true } },
+    },
+  });
+}
+
+async function createInvoice({ userId, workLogIds = [], ...data }) {
+  try {
+    return await prisma.$transaction(async (tx) => {
+      const invoice = await tx.invoice.create({ data: { userId, ...data } });
+      if (workLogIds.length) {
+        await tx.invoiceWorkLog.createMany({
+          data: workLogIds.map((workLogId) => ({ invoiceId: invoice.id, workLogId })),
+        });
+      }
+      return findInvoiceByIdWith(tx, userId, invoice.id);
+    });
+  } catch (err) {
+    if (err.code === 'P2002') throw new AppError('Uno o mas WorkLogs ya fueron facturados', 409);
+    throw err;
+  }
+}
+
+function getInvoicesByUser(userId, {
+  includeInactive = false, clientId, contractId, status, from, to,
+} = {}) {
+  return prisma.invoice.findMany({
+    where: {
+      userId,
+      ...(includeInactive ? {} : { active: true }),
+      ...(clientId ? { clientId } : {}),
+      ...(contractId ? { contractId } : {}),
+      ...(status ? { status } : {}),
+      ...((from || to) ? { issuedAt: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
+    },
+    include: invoiceInclude,
+    orderBy: [{ issuedAt: 'desc' }, { createdAt: 'desc' }],
+  });
+}
+
+function findInvoiceById(userId, invoiceId) {
+  return findInvoiceByIdWith(prisma, userId, invoiceId);
+}
+
+async function lockInvoice(tx, userId, invoiceId) {
+  const rows = await tx.$queryRaw`
+    SELECT "id" FROM "Invoice" WHERE "id" = ${invoiceId}::uuid AND "userId" = ${userId}::uuid FOR UPDATE
+  `;
+  if (rows.length !== 1) throw new AppError('Invoice no encontrada', 404);
+}
+
+async function activePaymentTotal(tx, invoiceId, excludedPaymentId) {
+  const result = await tx.payment.aggregate({
+    where: {
+      invoiceId,
+      active: true,
+      ...(excludedPaymentId ? { id: { not: excludedPaymentId } } : {}),
+    },
+    _sum: { amount: true },
+  });
+  return result._sum.amount || new Prisma.Decimal(0);
+}
+
+function synchronizedInvoiceStatus(currentStatus, paidAmount, subtotal) {
+  if (currentStatus === 'DRAFT' || currentStatus === 'CANCELLED') return currentStatus;
+  return paidAmount.eq(subtotal) ? 'PAID' : 'PENDING';
+}
+
+async function updateInvoice(userId, invoiceId, { workLogIds, ...data }) {
+  try {
+    return await prisma.$transaction(async (tx) => {
+      await lockInvoice(tx, userId, invoiceId);
+      const current = await tx.invoice.findUnique({ where: { id: invoiceId } });
+      const allPayments = await tx.payment.count({ where: { invoiceId } });
+      const paidAmount = await activePaymentTotal(tx, invoiceId);
+      const finalSubtotal = data.subtotal || current.subtotal;
+      if (data.currency && data.currency !== current.currency && allPayments > 0) {
+        throw new AppError('No se puede cambiar la moneda de una invoice con payments', 409);
+      }
+      if (finalSubtotal.lt(paidAmount)) {
+        throw new AppError('El subtotal no puede ser menor que el monto ya pagado', 409);
+      }
+      if (data.status === 'PAID' && !paidAmount.eq(finalSubtotal)) {
+        throw new AppError('La invoice solo puede marcarse PAID cuando esta completamente pagada', 409);
+      }
+
+      const requestedStatus = data.status || current.status;
+      const finalStatus = synchronizedInvoiceStatus(requestedStatus, paidAmount, finalSubtotal);
+      const updateData = {
+        ...data,
+        status: finalStatus,
+        ...(data.active === true ? { deletedAt: null } : {}),
+        ...(data.active === false && current.active ? { deletedAt: new Date() } : {}),
+      };
+      await tx.invoice.update({ where: { id: invoiceId }, data: updateData });
+      if (workLogIds !== undefined) {
+        await tx.invoiceWorkLog.deleteMany({ where: { invoiceId } });
+        if (workLogIds.length) {
+          await tx.invoiceWorkLog.createMany({
+            data: workLogIds.map((workLogId) => ({ invoiceId, workLogId })),
+          });
+        }
+      }
+      return findInvoiceByIdWith(tx, userId, invoiceId);
+    });
+  } catch (err) {
+    if (err.code === 'P2002') throw new AppError('Uno o mas WorkLogs ya fueron facturados', 409);
+    throw err;
+  }
+}
+
+function archiveInvoice(userId, invoiceId) {
+  return prisma.$transaction(async (tx) => {
+    await lockInvoice(tx, userId, invoiceId);
+    const current = await tx.invoice.findUnique({ where: { id: invoiceId } });
+    if (current.active) {
+      await tx.invoice.update({ where: { id: invoiceId }, data: { active: false, deletedAt: new Date() } });
+    }
+    return findInvoiceByIdWith(tx, userId, invoiceId);
+  });
+}
+
+async function syncInvoiceStatus(tx, invoice) {
+  const paidAmount = await activePaymentTotal(tx, invoice.id);
+  const status = synchronizedInvoiceStatus(invoice.status, paidAmount, invoice.subtotal);
+  if (status !== invoice.status) await tx.invoice.update({ where: { id: invoice.id }, data: { status } });
+}
+
+function createPayment({ userId, invoiceId, amount, currency, paidAt, method, note }) {
+  return prisma.$transaction(async (tx) => {
+    await lockInvoice(tx, userId, invoiceId);
+    const invoice = await tx.invoice.findUnique({ where: { id: invoiceId } });
+    if (!invoice.active) throw new AppError('No se puede registrar un payment en una invoice archivada', 409);
+    if (invoice.status === 'CANCELLED') throw new AppError('No se puede registrar un payment en una invoice cancelada', 409);
+    if (currency !== invoice.currency) throw new AppError('La moneda del payment no coincide con la invoice', 409);
+    const paidAmount = await activePaymentTotal(tx, invoiceId);
+    if (paidAmount.plus(amount).gt(invoice.subtotal)) throw new AppError('El payment supera el saldo pendiente de la invoice', 409);
+    const payment = await tx.payment.create({
+      data: { userId, invoiceId, clientId: invoice.clientId, amount, currency, paidAt, method, note },
+    });
+    await syncInvoiceStatus(tx, invoice);
+    return findPaymentByIdWith(tx, userId, payment.id);
+  });
+}
+
+function getPaymentsByUser(userId, {
+  includeInactive = false, invoiceId, clientId, from, to,
+} = {}) {
+  return prisma.payment.findMany({
+    where: {
+      userId,
+      ...(includeInactive ? {} : { active: true }),
+      ...(invoiceId ? { invoiceId } : {}),
+      ...(clientId ? { clientId } : {}),
+      ...((from || to) ? { paidAt: { ...(from ? { gte: from } : {}), ...(to ? { lte: to } : {}) } } : {}),
+    },
+    include: paymentInclude,
+    orderBy: [{ paidAt: 'desc' }, { createdAt: 'desc' }],
+  });
+}
+
+function findPaymentById(userId, paymentId) {
+  return findPaymentByIdWith(prisma, userId, paymentId);
+}
+
+function updatePayment(userId, paymentId, data) {
+  return prisma.$transaction(async (tx) => {
+    let current = await tx.payment.findFirst({ where: { id: paymentId, userId } });
+    if (!current) throw new AppError('Payment no encontrado', 404);
+    await lockInvoice(tx, userId, current.invoiceId);
+    current = await tx.payment.findFirst({ where: { id: paymentId, userId } });
+    if (!current) throw new AppError('Payment no encontrado', 404);
+    const invoice = await tx.invoice.findUnique({ where: { id: current.invoiceId } });
+    const finalActive = data.active ?? current.active;
+    const finalAmount = data.amount || current.amount;
+    if (invoice.status === 'CANCELLED' && finalActive && (!current.active || data.amount)) {
+      throw new AppError('No se puede reactivar o modificar un payment activo en una invoice cancelada', 409);
+    }
+    if (finalActive) {
+      const otherPaid = await activePaymentTotal(tx, invoice.id, paymentId);
+      if (otherPaid.plus(finalAmount).gt(invoice.subtotal)) throw new AppError('El payment supera el saldo pendiente de la invoice', 409);
+    }
+    await tx.payment.update({
+      where: { id: paymentId },
+      data: {
+        ...data,
+        ...(data.active === true ? { deletedAt: null } : {}),
+        ...(data.active === false && current.active ? { deletedAt: new Date() } : {}),
+      },
+    });
+    await syncInvoiceStatus(tx, invoice);
+    return findPaymentByIdWith(tx, userId, paymentId);
+  });
+}
+
+function archivePayment(userId, paymentId) {
+  return prisma.$transaction(async (tx) => {
+    let current = await tx.payment.findFirst({ where: { id: paymentId, userId } });
+    if (!current) throw new AppError('Payment no encontrado', 404);
+    await lockInvoice(tx, userId, current.invoiceId);
+    current = await tx.payment.findFirst({ where: { id: paymentId, userId } });
+    if (!current) throw new AppError('Payment no encontrado', 404);
+    const invoice = await tx.invoice.findUnique({ where: { id: current.invoiceId } });
+    if (current.active) {
+      await tx.payment.update({ where: { id: paymentId }, data: { active: false, deletedAt: new Date() } });
+      await syncInvoiceStatus(tx, invoice);
+    }
+    return findPaymentByIdWith(tx, userId, paymentId);
+  });
+}
+
 module.exports = {
   toPublicUser,
   createUser,
@@ -272,4 +524,15 @@ module.exports = {
   getWorkLogsByUser,
   findWorkLogById,
   updateWorkLog,
+  findInvoiceWorkLogs,
+  createInvoice,
+  getInvoicesByUser,
+  findInvoiceById,
+  updateInvoice,
+  archiveInvoice,
+  createPayment,
+  getPaymentsByUser,
+  findPaymentById,
+  updatePayment,
+  archivePayment,
 };

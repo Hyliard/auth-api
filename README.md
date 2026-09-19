@@ -149,6 +149,16 @@ auth-api/
 | GET | /api/worklogs/:workLogId | Si | Obtener registro, incluso archivado |
 | PATCH | /api/worklogs/:workLogId | Si | Editar o reactivar registro |
 | DELETE | /api/worklogs/:workLogId | Si | Archivar registro de trabajo |
+| POST | /api/invoices | Si | Crear invoice y asociar WorkLogs opcionales |
+| GET | /api/invoices | Si | Listar y filtrar invoices activas |
+| GET | /api/invoices/:invoiceId | Si | Obtener invoice con WorkLogs, Payments y saldos |
+| PATCH | /api/invoices/:invoiceId | Si | Editar o reactivar invoice |
+| DELETE | /api/invoices/:invoiceId | Si | Archivar invoice |
+| POST | /api/payments | Si | Registrar pago parcial o total |
+| GET | /api/payments | Si | Listar y filtrar payments activos |
+| GET | /api/payments/:paymentId | Si | Obtener payment propio |
+| PATCH | /api/payments/:paymentId | Si | Editar o reactivar payment |
+| DELETE | /api/payments/:paymentId | Si | Archivar payment |
 
 ### Avatar de perfil
 
@@ -206,6 +216,64 @@ Ejemplo de creacion:
   "hours": "8.00",
   "isOvertime": false,
   "note": "Implementacion de endpoints"
+}
+```
+
+### Invoices y Payments
+
+Una Invoice representa el monto facturado y un Payment representa dinero recibido.
+No se crea una Invoice automaticamente por cada WorkLog. Al crear o editar una
+Invoice se pueden asociar WorkLogs mediante `workLogIds`; cada WorkLog puede quedar
+vinculado a una sola Invoice, debe estar activo y ser coherente con el Client,
+Contract y currency de la Invoice. Archivar una Invoice no elimina sus WorkLogs ni
+Payments y tampoco libera esos WorkLogs para facturarlos otra vez.
+
+`GET /api/invoices` admite filtros combinables `includeInactive`, `clientId`,
+`contractId`, `status`, `from`, `to` y `overdue`. `from`/`to` filtran `issuedAt`.
+`overdue` se deriva cuando la Invoice esta pendiente, tiene saldo y `dueDate` ya
+paso; `OVERDUE` no se persiste. `GET` por ID incluye Client, Contract, WorkLogs,
+Payments activos, `paidAmount`, `outstandingAmount` y `effectiveStatus`.
+
+Los Payments siempre pertenecen a una Invoice, admiten pagos parciales y multiples
+pagos hasta completar el subtotal. Su currency debe coincidir y un sobrepago
+devuelve `409`. Al completar el subtotal el estado persistido pasa a `PAID`; si se
+edita o archiva un Payment y reaparece saldo, vuelve a `PENDING` salvo que la Invoice
+sea `DRAFT` o `CANCELLED`. Una Invoice cancelada conserva su historial pero no
+acepta pagos nuevos. `GET /api/payments` permite `includeInactive`, `invoiceId`,
+`clientId`, `from` y `to` (sobre `paidAt`). Ambos DELETE son soft delete idempotente.
+
+Todos los importes se envian preferentemente y se devuelven como strings decimales.
+No se convierten a `Number`, no se mezclan monedas y esta version no hace conversion
+FX ni presenta totales agregados entre currencies. Todos los recursos se filtran
+por el usuario autenticado y nunca se acepta `userId` desde el request.
+
+Ejemplo de Invoice:
+
+```json
+{
+  "clientId": "8c652b15-ed56-4adc-8228-8784ce708d03",
+  "contractId": "18579494-2677-43dd-91c5-8502fdcce36f",
+  "periodFrom": "2026-09-01",
+  "periodTo": "2026-09-30",
+  "currency": "USD",
+  "subtotal": "1200.00",
+  "issuedAt": "2026-09-30",
+  "dueDate": "2026-10-10",
+  "note": "September work",
+  "workLogIds": ["8cbac1d2-fb34-4718-a0b5-a902b11d7f54"]
+}
+```
+
+Ejemplo de Payment parcial:
+
+```json
+{
+  "invoiceId": "72348850-123a-4ed4-b05b-098808e55d67",
+  "amount": "400.00",
+  "currency": "USD",
+  "paidAt": "2026-10-05",
+  "method": "Bank Transfer",
+  "note": "First partial payment"
 }
 ```
 

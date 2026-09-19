@@ -40,6 +40,14 @@ test('Phase 1 against isolated PostgreSQL', { timeout: 60000 }, async (t) => {
   const base = `http://127.0.0.1:${server.address().port}`;
   t.after(async () => {
     await new Promise((resolve) => { server.close(resolve); server.closeAllConnections(); });
+    await prisma.invoiceWorkLog.deleteMany({
+      where: {
+        OR: [
+          { invoice: { user: { email: { endsWith: suffix } } } },
+          { workLog: { user: { email: { endsWith: suffix } } } },
+        ],
+      },
+    });
     await prisma.user.deleteMany({ where: { email: { endsWith: suffix } } });
     await prisma.$disconnect();
     rmSync(avatarStorageDir, { recursive: true, force: true });
@@ -368,6 +376,199 @@ test('Phase 1 against isolated PostgreSQL', { timeout: 60000 }, async (t) => {
     assert.equal(response.status, 200);
     assert.equal(response.body.workLog.active, true);
     assert.equal(response.body.workLog.deletedAt, null);
+  });
+
+  await t.test('invoices and payments: financial rules, ownership, filters and soft delete', async () => {
+    const owner = await fixture('finance-owner');
+    const other = await fixture('finance-other');
+    const session = await login(owner);
+    const otherSession = await login(other);
+    const client = await store.createClient({ userId: owner.id, name: 'Finance Client', email: null, company: 'Finance Co' });
+    const inactiveClient = await store.createClient({ userId: owner.id, name: 'Archived Finance Client', email: null, company: null });
+    await store.updateClient(owner.id, inactiveClient.id, { active: false });
+    const otherClient = await store.createClient({ userId: other.id, name: 'Foreign Client', email: null, company: null });
+    const contract = await store.createContract({
+      userId: owner.id, clientId: client.id, name: 'Finance Contract', hourlyRate: '100', currency: 'USD',
+    });
+    const inactiveContract = await store.createContract({
+      userId: owner.id, clientId: client.id, name: 'Archived Contract', hourlyRate: '100', currency: 'USD',
+    });
+    await store.updateContract(owner.id, inactiveContract.id, { active: false });
+    const otherContract = await store.createContract({
+      userId: other.id, clientId: otherClient.id, name: 'Foreign Contract', hourlyRate: '80', currency: 'USD',
+    });
+    const workLog = await store.createWorkLog({
+      userId: owner.id, contractId: contract.id, workDate: new Date('2026-09-10T00:00:00.000Z'), hours: '8', note: null,
+    });
+    const secondWorkLog = await store.createWorkLog({
+      userId: owner.id, contractId: contract.id, workDate: new Date('2026-09-11T00:00:00.000Z'), hours: '2', note: null,
+    });
+    const inactiveWorkLog = await store.createWorkLog({
+      userId: owner.id, contractId: contract.id, workDate: new Date('2026-09-12T00:00:00.000Z'), hours: '1', note: null,
+    });
+    await store.updateWorkLog(owner.id, inactiveWorkLog.id, { active: false, deletedAt: new Date() });
+    const foreignWorkLog = await store.createWorkLog({
+      userId: other.id, contractId: otherContract.id, workDate: new Date('2026-09-10T00:00:00.000Z'), hours: '1', note: null,
+    });
+    const invoicePayload = {
+      clientId: client.id,
+      contractId: contract.id,
+      number: 'INV-2026-001',
+      periodFrom: '2026-09-01',
+      periodTo: '2026-09-30',
+      currency: 'usd',
+      subtotal: '1000.00',
+      issuedAt: '2026-09-01',
+      dueDate: '2026-09-10',
+      note: 'September work',
+      workLogIds: [workLog.id],
+    };
+
+    let response = await request('POST', '/api/invoices', invoicePayload, session.token);
+    assert.equal(response.status, 201);
+    assert.equal(response.body.invoice.userId, undefined);
+    assert.equal(response.body.invoice.currency, 'USD');
+    assert.equal(response.body.invoice.subtotal, '1000');
+    assert.equal(response.body.invoice.paidAmount, '0');
+    assert.equal(response.body.invoice.outstandingAmount, '1000');
+    assert.equal(response.body.invoice.effectiveStatus, 'OVERDUE');
+    assert.deepEqual(response.body.invoice.workLogs.map((item) => item.id), [workLog.id]);
+    const invoiceId = response.body.invoice.id;
+
+    assert.equal((await request('GET', `/api/invoices/${invoiceId}`, undefined, session.token)).status, 200);
+    for (const query of [
+      `clientId=${client.id}`,
+      `contractId=${contract.id}`,
+      'status=PENDING',
+      'from=2026-09-01&to=2026-09-30',
+      'overdue=true',
+    ]) {
+      response = await request('GET', `/api/invoices?${query}`, undefined, session.token);
+      assert.equal(response.status, 200);
+      assert.equal(response.body.invoices.some((invoice) => invoice.id === invoiceId), true);
+    }
+    response = await request('PATCH', `/api/invoices/${invoiceId}`, { note: 'Corrected', workLogIds: [workLog.id, secondWorkLog.id] }, session.token);
+    assert.equal(response.status, 200);
+    assert.equal(response.body.invoice.note, 'Corrected');
+    assert.equal(response.body.invoice.workLogs.length, 2);
+
+    assert.equal((await request('POST', '/api/invoices', { ...invoicePayload, number: 'DUPLICATE' }, session.token)).status, 409);
+    assert.equal((await request('POST', '/api/invoices', { ...invoicePayload, workLogIds: [foreignWorkLog.id] }, session.token)).status, 404);
+    assert.equal((await request('POST', '/api/invoices', { ...invoicePayload, workLogIds: [inactiveWorkLog.id] }, session.token)).status, 409);
+    assert.equal((await request('POST', '/api/invoices', { ...invoicePayload, clientId: inactiveClient.id, contractId: null, workLogIds: [] }, session.token)).status, 409);
+    assert.equal((await request('POST', '/api/invoices', { ...invoicePayload, contractId: inactiveContract.id, workLogIds: [] }, session.token)).status, 409);
+    assert.equal((await request('POST', '/api/invoices', { ...invoicePayload, currency: 'US', workLogIds: [] }, session.token)).status, 400);
+    assert.equal((await request('POST', '/api/invoices', { ...invoicePayload, periodFrom: '2026-10-01', workLogIds: [] }, session.token)).status, 400);
+    assert.equal((await request('POST', '/api/invoices', { ...invoicePayload, dueDate: '2026-08-31', workLogIds: [] }, session.token)).status, 400);
+    assert.equal((await request('POST', '/api/invoices', { ...invoicePayload, subtotal: '0', workLogIds: [] }, session.token)).status, 400);
+    assert.equal((await request('POST', '/api/invoices', { ...invoicePayload, userId: owner.id, workLogIds: [] }, session.token)).status, 400);
+    assert.equal((await request('PATCH', `/api/invoices/${invoiceId}`, {}, session.token)).status, 400);
+    assert.equal((await request('GET', `/api/invoices/${invoiceId}`, undefined, otherSession.token)).status, 404);
+    assert.equal((await request('GET', `/api/invoices?clientId=${otherClient.id}`, undefined, session.token)).status, 404);
+
+    const otherInvoice = await request('POST', '/api/invoices', {
+      clientId: otherClient.id, contractId: otherContract.id, currency: 'USD', subtotal: '100', issuedAt: '2026-09-30',
+    }, otherSession.token);
+    assert.equal(otherInvoice.status, 201);
+    assert.equal((await request('POST', '/api/payments', {
+      invoiceId: otherInvoice.body.invoice.id, amount: '10', currency: 'USD', paidAt: '2026-10-01',
+    }, session.token)).status, 404);
+
+    const paymentPayload = {
+      invoiceId, amount: '400.00', currency: 'usd', paidAt: '2026-10-05', method: 'Bank Transfer', note: 'Partial',
+    };
+    response = await request('POST', '/api/payments', paymentPayload, session.token);
+    assert.equal(response.status, 201);
+    assert.equal(response.body.payment.userId, undefined);
+    assert.equal(response.body.payment.amount, '400');
+    const firstPaymentId = response.body.payment.id;
+    response = await request('GET', `/api/invoices/${invoiceId}`, undefined, session.token);
+    assert.equal(response.body.invoice.paidAmount, '400');
+    assert.equal(response.body.invoice.outstandingAmount, '600');
+    assert.equal(response.body.invoice.effectiveStatus, 'OVERDUE');
+
+    response = await request('POST', '/api/payments', {
+      ...paymentPayload, amount: '600', paidAt: '2026-10-06', note: 'Final',
+    }, session.token);
+    assert.equal(response.status, 201);
+    const secondPaymentId = response.body.payment.id;
+    response = await request('GET', `/api/invoices/${invoiceId}`, undefined, session.token);
+    assert.equal(response.body.invoice.paidAmount, '1000');
+    assert.equal(response.body.invoice.outstandingAmount, '0');
+    assert.equal(response.body.invoice.status, 'PAID');
+    assert.equal(response.body.invoice.effectiveStatus, 'PAID');
+
+    assert.equal((await request('POST', '/api/payments', { ...paymentPayload, amount: '1' }, session.token)).status, 409);
+    assert.equal((await request('POST', '/api/payments', { ...paymentPayload, currency: 'EUR' }, session.token)).status, 409);
+    assert.equal((await request('PATCH', `/api/invoices/${invoiceId}`, { currency: 'EUR' }, session.token)).status, 409);
+    assert.equal((await request('PATCH', `/api/invoices/${invoiceId}`, { subtotal: '999' }, session.token)).status, 409);
+
+    for (const query of [
+      '', `?invoiceId=${invoiceId}`, `?clientId=${client.id}`, '?from=2026-10-01&to=2026-10-31',
+    ]) {
+      response = await request('GET', `/api/payments${query}`, undefined, session.token);
+      assert.equal(response.status, 200);
+      assert.equal(response.body.payments.length >= 2, true);
+    }
+    assert.equal((await request('GET', `/api/payments/${firstPaymentId}`, undefined, session.token)).status, 200);
+    assert.equal((await request('GET', `/api/payments/${firstPaymentId}`, undefined, otherSession.token)).status, 404);
+    assert.equal((await request('POST', '/api/payments', { ...paymentPayload, userId: owner.id }, session.token)).status, 400);
+    assert.equal((await request('POST', '/api/payments', { ...paymentPayload, amount: '0' }, session.token)).status, 400);
+    assert.equal((await request('PATCH', `/api/payments/${firstPaymentId}`, {}, session.token)).status, 400);
+
+    response = await request('PATCH', `/api/payments/${secondPaymentId}`, { amount: '500', note: 'Adjusted' }, session.token);
+    assert.equal(response.status, 200);
+    response = await request('GET', `/api/invoices/${invoiceId}`, undefined, session.token);
+    assert.equal(response.body.invoice.paidAmount, '900');
+    assert.equal(response.body.invoice.outstandingAmount, '100');
+    assert.equal(response.body.invoice.status, 'PENDING');
+    assert.equal(response.body.invoice.effectiveStatus, 'OVERDUE');
+    assert.equal((await request('PATCH', `/api/payments/${secondPaymentId}`, { amount: '600' }, session.token)).status, 200);
+
+    response = await request('DELETE', `/api/payments/${firstPaymentId}`, undefined, session.token);
+    assert.equal(response.status, 200);
+    assert.equal(response.body.payment.active, false);
+    assert.notEqual(response.body.payment.deletedAt, null);
+    response = await request('GET', `/api/invoices/${invoiceId}`, undefined, session.token);
+    assert.equal(response.body.invoice.paidAmount, '600');
+    assert.equal(response.body.invoice.status, 'PENDING');
+    assert.equal(response.body.invoice.payments.some((payment) => payment.id === firstPaymentId), false);
+    response = await request('GET', '/api/payments?includeInactive=true', undefined, session.token);
+    assert.equal(response.body.payments.some((payment) => payment.id === firstPaymentId && !payment.active), true);
+    assert.equal((await request('PATCH', `/api/payments/${firstPaymentId}`, { active: true }, session.token)).status, 200);
+    response = await request('GET', `/api/invoices/${invoiceId}`, undefined, session.token);
+    assert.equal(response.body.invoice.paidAmount, '1000');
+    assert.equal(response.body.invoice.status, 'PAID');
+
+    response = await request('PATCH', `/api/invoices/${invoiceId}`, { status: 'CANCELLED' }, session.token);
+    assert.equal(response.status, 200);
+    assert.equal(response.body.invoice.effectiveStatus, 'CANCELLED');
+    assert.equal((await request('POST', '/api/payments', { ...paymentPayload, amount: '1' }, session.token)).status, 409);
+    assert.equal((await request('PATCH', `/api/invoices/${invoiceId}`, { status: 'PAID' }, session.token)).status, 200);
+
+    const euroInvoice = await request('POST', '/api/invoices', {
+      clientId: client.id, currency: 'EUR', subtotal: '250.50', issuedAt: '2026-11-01', workLogIds: [],
+    }, session.token);
+    assert.equal(euroInvoice.status, 201);
+    assert.equal(euroInvoice.body.invoice.currency, 'EUR');
+    assert.equal(euroInvoice.body.invoice.subtotal, '250.5');
+    assert.equal(response.body.invoice.currency, 'USD');
+
+    response = await request('DELETE', `/api/invoices/${invoiceId}`, undefined, session.token);
+    assert.equal(response.status, 200);
+    assert.equal(response.body.invoice.active, false);
+    assert.notEqual(response.body.invoice.deletedAt, null);
+    response = await request('DELETE', `/api/invoices/${invoiceId}`, undefined, session.token);
+    assert.equal(response.status, 200);
+    assert.equal((await request('GET', `/api/invoices/${invoiceId}`, undefined, session.token)).status, 200);
+    response = await request('GET', '/api/invoices', undefined, session.token);
+    assert.equal(response.body.invoices.some((invoice) => invoice.id === invoiceId), false);
+    response = await request('GET', '/api/invoices?includeInactive=true', undefined, session.token);
+    assert.equal(response.body.invoices.some((invoice) => invoice.id === invoiceId && !invoice.active), true);
+    response = await request('PATCH', `/api/invoices/${invoiceId}`, { active: true }, session.token);
+    assert.equal(response.status, 200);
+    assert.equal(response.body.invoice.active, true);
+    assert.equal(response.body.invoice.deletedAt, null);
   });
 
   await t.test('avatar upload, validation, replacement, isolation, download and account cleanup', async (st) => {

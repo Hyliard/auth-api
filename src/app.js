@@ -3,6 +3,8 @@ const authRoutes = require('./routes/auth.routes');
 const clientRoutes = require('./routes/client.routes');
 const contractRoutes = require('./routes/contract.routes');
 const workLogRoutes = require('./routes/worklog.routes');
+const invoiceRoutes = require('./routes/invoice.routes');
+const paymentRoutes = require('./routes/payment.routes');
 const deviceRoutes = require('./routes/device.routes');
 const userRoutes = require('./routes/user.routes');
 const { notFoundHandler, errorHandler } = require('./middleware/error.middleware');
@@ -21,6 +23,8 @@ app.use('/api/auth', authRoutes);
 app.use('/api/clients', clientRoutes);
 app.use('/api/contracts', contractRoutes);
 app.use('/api/worklogs', workLogRoutes);
+app.use('/api/invoices', invoiceRoutes);
+app.use('/api/payments', paymentRoutes);
 app.use('/api/devices', deviceRoutes);
 app.use('/api/users', userRoutes);
 
